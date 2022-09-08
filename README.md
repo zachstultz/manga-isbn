@@ -1,4 +1,4 @@
 # Manga/Light Novel ISBN Metadata Puller
-An automation script that pulls metadata for manga/light novels and injects it into those files.
+An automation script that takes cbz manga and epub light novel files, searches them up on google-books, kobo books, barnes & noble, or bookwalker, validates the metadata and writes to the file. Writing for manga is done with comictagger, and writing for light novels is done with calibre.
 
 The script is currently use at your own risk. It is not currently user friendly. I need to clean up some code, do a more proper readme with all the available options, and cleanup/fix the requirements. Give me some time.
