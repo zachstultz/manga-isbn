@@ -21,8 +21,7 @@ import random
 import calendar
 import langcodes
 import socket
-
-# import translators as ts
+import translators as ts
 import anilist
 import nltk
 import xml.etree.ElementTree as ET
@@ -43,19 +42,22 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from math import log10, sqrt
+from simyan.comicvine import Comicvine
+from simyan.sqlite_cache import SQLiteCache
+from simyan.comicvine import Comicvine, ComicvineResource
 
-# Version: v1.01
+# Version: 1.01
 
-# RUNNNT THESE INSTALLS FOR THE PROGRAM TO WORK PROPERLY!
+# RUN THESE INSTALLS FOR THE PROGRAM TO WORK PROPERLY!
 # sudo apt-get update && sudo pip3 install comictagger[all] && sudo apt-get install calibre && sudo apt-get install wget && sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin && sudo apt-get install tesseract-ocr
 
 # REQUIRES CHROME TO BE INSTALLED!
-# wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && pip3 install webdriver-manager && pip3 install regex && pip3 install bs4 && pip3 install selenium
+# wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && pip3 install webdriver-manager && pip3 install regex && pip3 install bs4 && pip3 install selenium && rm google-chrome-stable_current_amd64.deb
 
 # downoads required items for nltk.tokenize
 # nltk.download("punkt")
 # The root direcotry for saving of images
-ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 # Accepted internal zip image extensions
 image_extensions = ["jpg", "jpeg", "png", "tbn", "jxl"]
 # Accepted files when os.walk is used
@@ -106,18 +108,27 @@ skip_all_non_comic_tagger_tagged = False
 # matches. Square-enix releases are not released digitally on google-books.
 # Paperback metadata will be used.
 square_enix_bypass = True
+# Whether or not to scrape google
+scrape_google = True
 # Whether or not to scrape kobo books
 scrape_kobo = False
 # Whether or not to scrape bookwalker
 scrape_bookwalker = True
 # Whether or not to scrape barnes and noble
 scrape_barnes_and_noble = True
+# Whether or not to scrape comic vine
+scrape_comic_vine = True
+# Comic Vine API Key
+comic_vine_api_key = ""
 # skips any volume number that isn't one
 skip_non_volume_ones = False
 # the amount of time to sleep for when the api hits the rate limit in seconds
 sleep_time = 35
 # The amount of time to sleep when a limit is hit when webscraping
 web_scrape_sleep_time = 5
+# The amount of time to sleep inbetween comic vine results.
+# Maximum of 200 API hits per hour per category.
+comic_vine_sleep_time = 36
 # the isbn-13 regex used throughout the program
 isbn_13_regex = "(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})"
 # Our ignored folder names
@@ -172,9 +183,11 @@ skip_volume_if_already_has_anilist_id = False
 # whether or not to translate title names to improve matching when
 # matching to anilist
 translate_titles = False
-# our current list of supported metadata providers
-providers = ["google", "kobo", "barnes_and_noble", "bookwalker"]
+
 series_ids_cache = []
+
+# Skips any files that were tagged by google books
+skip_google_metadata = False
 
 # argument parser
 def image_arg_parser():
@@ -262,6 +275,12 @@ def image_arg_parser():
         required=False,
     )
     parser.add_argument(
+        "-sg",
+        "--scrape_google",
+        help="If enabled, the program will scrape google for metadata",
+        required=False,
+    )
+    parser.add_argument(
         "-sbw",
         "--scrape_bookwalker",
         help="If enabled, the program will scrape bookwalker for metadata.",
@@ -283,6 +302,18 @@ def image_arg_parser():
         "-sban",
         "--scrape_barnes_and_noble",
         help="If enabled, the program will scrape barnes for metadata.",
+        required=False,
+    )
+    parser.add_argument(
+        "-scv",
+        "--scrape_comic_vine",
+        help="If enabled, the program will scrape comic_vine for metadata.",
+        required=False,
+    )
+    parser.add_argument(
+        "-sgm",
+        "--skip_google_metadata",
+        help="If enabled, the program will skip files that already have google metadata.",
         required=False,
     )
     return parser
@@ -362,6 +393,25 @@ class Result:
         self.extracted_texts = extracted_texts
 
 
+class Provider:
+    def __init__(self, name, enabled, priority_number):
+        self.name = name
+        self.enabled = enabled
+        self.priority_number = priority_number
+
+
+# our current list of supported metadata providers
+providers = [
+    Provider("google", True, 1),
+    Provider("bookwalker", True, 2),
+    Provider("kobo", False, 3),
+    Provider("barnes_and_noble", True, 4),
+    Provider("comic_vine", True, 5),
+]
+
+# order providers by priority, lowest number first
+providers.sort(key=lambda x: x.priority_number)
+
 # Appends, sends, and prints our error message
 def send_error_message(error, discord=True):
     print(error)
@@ -395,9 +445,12 @@ def send_discord_message(message):
 
 # execute command with subprocess and reutrn the output
 def execute_command(command):
-    process = subprocess.Popen(command, stdout=subprocess.PIPE)
-    output, error = process.communicate()
-    return output.decode("utf-8")
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+        return output.decode("utf-8")
+    except Exception as e:
+        send_error_message(e)
 
 
 # prints our ocr extracted texts
@@ -466,8 +519,17 @@ def find_all_searches(extracted_texts, file):
 
 # Return the zip comment for the passed zip file
 def get_zip_comment(zip_file):
-    with zipfile.ZipFile(zip_file, "r") as zip_ref:
-        return zip_ref.comment.decode("utf-8")
+    try:
+        with zipfile.ZipFile(zip_file, "r") as zip_ref:
+            return zip_ref.comment.decode("utf-8")
+    except Exception as e:
+        send_error_message(str(e))
+        send_error_message("\tFailed to get zip comment for: " + zip_file)
+        write_to_file("errors.txt", str(e))
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print(exc_type, fname, exc_tb.tb_lineno)
+        return ""
 
 
 # Append the passed string to the zip file's comment, seperated by a comma
@@ -670,7 +732,7 @@ def get_series_name_from_file_name(name):
 def check_for_multi_volume_file(file_name):
     if re.search(
         r"(\b(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)(\.)?(\s+)?([0-9]+(\.[0-9]+)?)([-_]([0-9]+(\.[0-9]+)?))+\b)",
-        file_name,
+        remove_bracketed_info_from_name(file_name),
         re.IGNORECASE,
     ):
         return True
@@ -791,28 +853,41 @@ attempts = 1
 
 
 def set_num_as_float_or_int(volume_number):
-    if volume_number != "":
-        if isinstance(volume_number, list):
-            result = ""
-            for num in volume_number:
-                if float(num) == int(num):
-                    if num == volume_number[-1]:
-                        result += str(int(num))
+    try:
+        if volume_number != "":
+            # if re search for \xbd or ½, repalce it with 0.5
+            if re.search(r"(\xbd)", str(volume_number)) or re.search(
+                r"(½)", str(volume_number)
+            ):
+                volume_number = re.sub(r"(\xbd)", "0.5", str(volume_number))
+                volume_number = re.sub(r"(½)", "0.5", str(volume_number))
+            if isinstance(volume_number, list):
+                result = ""
+                for num in volume_number:
+                    if float(num) == int(num):
+                        if num == volume_number[-1]:
+                            result += str(int(num))
+                        else:
+                            result += str(int(num)) + "-"
                     else:
-                        result += str(int(num)) + "-"
-                else:
-                    if num == volume_number[-1]:
-                        result += str(float(num))
-                    else:
-                        result += str(float(num)) + "-"
-            return result
-        elif isinstance(volume_number, str) and re.search(r"\.", volume_number):
-            volume_number = float(volume_number)
-        else:
-            if float(volume_number) == int(volume_number):
-                volume_number = int(volume_number)
-            else:
+                        if num == volume_number[-1]:
+                            result += str(float(num))
+                        else:
+                            result += str(float(num)) + "-"
+                return result
+            elif isinstance(volume_number, str) and re.search(r"\.", volume_number):
                 volume_number = float(volume_number)
+            else:
+                if float(volume_number) == int(volume_number):
+                    volume_number = int(volume_number)
+                else:
+                    volume_number = float(volume_number)
+    except Exception as e:
+        send_error_message(
+            "\tFailed to convert volume number to float or int: " + str(volume_number)
+        )
+        send_error_message("\t" + str(e))
+        return ""
     return volume_number
 
 
@@ -1327,7 +1402,7 @@ def google_api_isbn_lookup(
                     if "publisher" in volume_info:
                         publisher = volume_info["publisher"]
                         publisher = re.sub(
-                            r"(,\s+|)(LLC|Inc)", "", publisher, flags=re.IGNORECASE
+                            r"(,\s+|)?((LLC|Inc).*)", "", publisher, flags=re.IGNORECASE
                         ).strip()
                         publisher = re.sub(r"[^a-zA-Z0-9\s-,\.]", "", publisher).strip()
                         publisher = titlecase(publisher)
@@ -1523,12 +1598,12 @@ def parse_zip_file(zip_file):
                 images.append(z_file)
         images = remove_hidden_files(images)
         images.sort()
-        # remove the first image from images [first image is usually the cover, so we don't need to scan that]
         if zip_file.split(".")[-1] == "cbz":
-            images.pop(0)
+            # remove the first image from images [first image is usually the cover, so we don't need to scan that]
+            # images.pop(0)
             comb = []
             back_images = images[-17:]
-            front_images = images[:6]
+            front_images = images[:7]
             front_images.reverse()
             back_images_two = back_images[-2:]
             back_images_two.reverse()
@@ -1954,9 +2029,7 @@ def check_for_published_date_upgrade(published_date_from_epub, published_date_fr
             api_day = ""
         if epub_year == api_year and epub_month == api_month and epub_day == api_day:
             return False
-        elif (epub_year == api_year) and (
-            published_date_from_epub != published_date_from_api
-        ):
+        elif published_date_from_epub != published_date_from_api:
             return True
         elif published_date_from_epub == published_date_from_api:
             return False
@@ -2741,22 +2814,17 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
                 # for item in id_results_filtered:
                 #     send_error_message("\t\t\t" + str(item.title))
                 #     send_error_message("\t\t\t\t" + str(item.url))
-                write_to_file(
-                    "no_search_results_from_anilist.txt",
-                    basename,
-                    without_date=True,
-                    check_for_dup=True,
-                )
         else:
             send_error_message("\tNo search results found.")
-            write_to_file(
-                "no_search_results_from_anilist.txt",
-                basename,
-                without_date=True,
-                check_for_dup=True,
-            )
     except Exception as e:
         print(e)
+    if not end_result:
+        write_to_file(
+            "no_search_results_from_anilist.txt",
+            basename,
+            without_date=True,
+            check_for_dup=True,
+        )
     return end_result
 
 
@@ -2861,7 +2929,7 @@ def compare_metadata(book, epub_path, files):
                 book_sum_compare = re.sub(r"(\t|\n|\r)", "", book.summary)
             else:
                 book_sum_compare = book.summary
-            if book_sum_compare != data.comments:
+            if convert_to_ascii(book_sum_compare) != convert_to_ascii(data.comments):
                 print_diff(data.comments, book.summary)
                 if extension == "epub":
                     update_metadata(
@@ -3223,94 +3291,109 @@ def update_metadata(
     half=False,
     cbz=False,
 ):
-    if not cbz:
-        if not skip_print:
-            print("\tUpdating " + item + ": ")
-            if not half:
-                print("\t\tFrom: " + str(data_num) + " \n\t\tTo:   " + str(book_num))
+    try:
+        if not cbz:
+            if not skip_print:
+                print("\tUpdating " + item + ": ")
+                if not half:
+                    print(
+                        "\t\tFrom: " + str(data_num) + " \n\t\tTo:   " + str(book_num)
+                    )
+                else:
+                    print(
+                        "\t\tFrom: "
+                        + str(data_num)
+                        + " \n\t\tTo:   "
+                        + str(book_num / 2)
+                    )
             else:
-                print(
-                    "\t\tFrom: " + str(data_num) + " \n\t\tTo:   " + str(book_num / 2)
-                )
+                print("\tUpdating " + item + " to " + str(book_num))
+            if item.lower() == "rating" or item.lower() == "index number":
+                book_num = str(book_num)
+        elif cbz and (len(data_num) == len(book_num)):
+            count = len(data_num)
+            for num in range(count):
+                y_clean = re.sub(r"(\^)([,=])", r"\2", book_num[num])
+                y_clean = y_clean.split("=", 1)
+                old_value = data_num[num]
+                if y_clean[0] != "credit":
+                    print("\tUpdating " + y_clean[0].capitalize() + ": ")
+                else:
+                    print("\tAdding " + y_clean[0].capitalize() + ": ")
+                print("\t\tFrom: " + str(old_value) + " \n\t\tTo:   " + str(y_clean[1]))
         else:
-            print("\tUpdating " + item + " to " + str(book_num))
-        if item.lower() == "rating" or item.lower() == "index number":
-            book_num = str(book_num)
-    elif cbz and (len(data_num) == len(book_num)):
-        count = len(data_num)
-        for num in range(count):
-            y_clean = re.sub(r"(\^)([,=])", r"\2", book_num[num])
-            y_clean = y_clean.split("=", 1)
-            old_value = data_num[num]
-            if y_clean[0] != "credit":
-                print("\tUpdating " + y_clean[0].capitalize() + ": ")
-            else:
-                print("\tAdding " + y_clean[0].capitalize() + ": ")
-            print("\t\tFrom: " + str(old_value) + " \n\t\tTo:   " + str(y_clean[1]))
-    else:
-        print("\tUpdating " + item + ": ")
-        print("\t\tFrom: " + str(data_num) + " \n\t\tTo: " + str(book_num))
-    combined = ""
-    if cbz:
-        for item in book_num:
-            if item != book_num[-1]:
-                combined += item + ", "
-            else:
-                combined += item
-    else:
-        combined = book_num
-    command = command.split(" ")
-    argument = argument.split(" ")
-    if cbz:
-        command.extend(argument)
-        command.append(combined)
-        command.append(epub_path)
-    else:
-        command.append(epub_path)
-        command.extend(argument)
-        command.append(combined)
-    execution_result = ""
-    if (
-        manual_metadata_write_approval
-        and not skip_print
-        and epub_path.endswith(".epub")
-        or manual_metadata_write_approval
-        and epub_path.endswith(".cbz")
-    ):
-        if input("\tApprove? (y/n): ") == "y":
+            print("\tUpdating " + item + ": ")
+            print("\t\tFrom: " + str(data_num) + " \n\t\tTo: " + str(book_num))
+        combined = ""
+        if cbz:
+            for item in book_num:
+                if item != book_num[-1]:
+                    combined += item + ", "
+                else:
+                    combined += item
+        else:
+            combined = book_num
+        command = command.split(" ")
+        argument = argument.split(" ")
+        if cbz:
+            command.extend(argument)
+            command.append(combined)
+            command.append(epub_path)
+        else:
+            command.append(epub_path)
+            command.extend(argument)
+            command.append(combined)
+        execution_result = ""
+        if (
+            manual_metadata_write_approval
+            and not skip_print
+            and epub_path.endswith(".epub")
+            or manual_metadata_write_approval
+            and epub_path.endswith(".cbz")
+        ):
+            if input("\tApprove? (y/n): ") == "y":
+                execution_result = execute_command(command)
+        else:
             execution_result = execute_command(command)
-    else:
-        execution_result = execute_command(command)
-    if (
-        execution_result
-        and re.search(
-            r"changed metadata|Successful match", execution_result, re.IGNORECASE
-        )
-        and not re.search(
+        if (
+            execution_result
+            and re.search(
+                r"changed metadata|Successful match", execution_result, re.IGNORECASE
+            )
+            and not re.search(
+                r"(Warning:|\berror\b|is not a valid tag name)",
+                execution_result,
+                re.IGNORECASE,
+            )
+        ):
+            print("\tSuccessfully updated\n")
+        elif re.search(
             r"(Warning:|\berror\b|is not a valid tag name)",
             execution_result,
             re.IGNORECASE,
-        )
-    ):
-        print("\tSuccessfully updated\n")
-    elif re.search(
-        r"(Warning:|\berror\b|is not a valid tag name)", execution_result, re.IGNORECASE
-    ):
-        send_error_message(
-            "\t\tWarning found in result, some parts may not have been updated properly."
-        )
-        send_error_message("\t\tRESULT: " + execution_result)
-    else:
-        send_error_message("\t\tFailed to update!")
-        send_error_message("\n\t\tCommand: " + str(command))
-        if epub_path.endswith(".epub"):
+        ):
             send_error_message(
-                "\t\tDo you have calibre installed? (sudo apt-get install calibre)"
+                "\t\tWarning found in result, some parts may not have been updated properly."
             )
-        elif epub_path.endswith(".cbz"):
-            send_error_message(
-                "\t\tDo you have comictagger installed? (https://github.com/comictagger/comictagger)"
-            )
+            send_error_message("\t\tRESULT: " + execution_result)
+        else:
+            send_error_message("\t\tFailed to update!")
+            send_error_message("\n\t\tCommand: " + str(command))
+            if epub_path.endswith(".epub"):
+                send_error_message(
+                    "\t\tDo you have calibre installed? (sudo apt-get install calibre)"
+                )
+            elif epub_path.endswith(".cbz"):
+                send_error_message(
+                    "\t\tDo you have comictagger installed? (https://github.com/comictagger/comictagger)"
+                )
+    except Exception as e:
+        send_error_message(e)
+        errors.append(e)
+        write_to_file("isbn_script_errors.txt", str(e))
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print(exc_type, fname, exc_tb.tb_lineno)
 
 
 # Checks for and returns the path of an associated cover file
@@ -3898,6 +3981,7 @@ def clean_api_results(
     skip_isebook_check=False,
     skip_categories_check=False,
     skip_summary_check=False,
+    series_similarity_score=0.4,
 ):
     if results:
         if not isinstance(results, list):
@@ -4042,7 +4126,7 @@ def clean_api_results(
                         )
                     ),
                 )
-                if score >= 0.4:
+                if score >= series_similarity_score:
                     print("\t\tPassed series similarity check")
                 else:
                     passed = False
@@ -4060,7 +4144,7 @@ def clean_api_results(
                 todays_month = datetime.now().month
                 todays_day = datetime.now().day
                 if result.is_ebook:
-                    print("\t\tPassed isEbook check")
+                    print("\t\tPassed is_ebook check")
                 elif (
                     square_enix_bypass
                     and re.search(r"Square", result.publisher, re.IGNORECASE)
@@ -4084,7 +4168,7 @@ def clean_api_results(
                     )
                 else:
                     passed = False
-                    print("\t\tFailed isEbook check")
+                    print("\t\tFailed is_ebook check")
             if not skip_categories_check:
                 if hasattr(result, "categories") and len(result.categories) > 0:
                     if extension == "epub" and re.search(
@@ -4092,26 +4176,35 @@ def clean_api_results(
                         result.categories[0],
                         re.IGNORECASE,
                     ):
-                        print("\t\tPassed Fiction Category check")
+                        print("\t\tPassed fiction category check")
                     elif extension == "cbz" and re.search(
                         r"Comic|Graphic|Manga", result.categories[0], re.IGNORECASE
                     ):
-                        print("\t\tPassed Comic/Graphic Category check")
+                        print("\t\tPassed comic/graphic category check")
                     else:
                         if extension == "epub":
-                            print("\t\tFailed Fiction Category check")
+                            print("\t\tFailed fiction category check")
                             passed = False
                         elif extension == "cbz":
-                            print("\t\tFailed Comic/Graphic Category check")
+                            print("\t\tFailed comic/graphic category check")
                             passed = False
                 else:
                     print("\t\tFailed Categories check, no categories field present.")
                     passed = False
             if not skip_summary_check:
                 if hasattr(result, "summary") and len(result.summary) > 0:
-                    print("\t\tPassed summary check")
+                    if not re.search(
+                        r"(Chapter([-_. ]+)?Titles.*)", result.summary, re.IGNORECASE
+                    ):
+                        print("\t\tPassed summary check")
+                    else:
+                        passed = False
+                        print("\t\tFailed summary check")
+                        print("\t\t\tContains chapter titles.")
+                        print(result.summary)
                 else:
                     print("\t\tFailed summary check")
+                    print("\t\t\tNo summary field present or empty summary.")
                     passed = False
             if passed:
                 print("\t\t-----Passed all checks-----")
@@ -4742,7 +4835,7 @@ def get_kobo_books_meta(
                             ).strip()
                             if publisher:
                                 publisher = re.sub(
-                                    r"(,\s+|)(LLC|Inc)",
+                                    r"(,\s+|)?((LLC|Inc).*)",
                                     "",
                                     publisher,
                                     flags=re.IGNORECASE,
@@ -5166,7 +5259,17 @@ def get_bookwalker_books_meta(link):
                                     if td_item:
                                         td_item_text = td_item.text.strip()
                                         if td_item_text:
-                                            publisher = titlecase(td_item_text)
+                                            publisher = td_item_text
+                                            publisher = re.sub(
+                                                r"(,\s+|)?((LLC|Inc).*)",
+                                                "",
+                                                publisher,
+                                                flags=re.IGNORECASE,
+                                            ).strip()
+                                            publisher = re.sub(
+                                                r"[^a-zA-Z0-9\s-,\.]", "", publisher
+                                            ).strip()
+                                            publisher = titlecase(publisher)
                                         else:
                                             print("\t\t\t - No publisher found")
                                     else:
@@ -5524,7 +5627,17 @@ def get_barnes_and_noble_books_meta(link, skip=False, data=None):
                                     else:
                                         print("\t\t - No ISBN found with regex!")
                             elif re.search(r"publisher", th_item, re.IGNORECASE):
-                                publisher = titlecase(td_item)
+                                publisher = td_item
+                                publisher = re.sub(
+                                    r"(,\s+|)?((LLC|Inc).*)",
+                                    "",
+                                    publisher,
+                                    flags=re.IGNORECASE,
+                                ).strip()
+                                publisher = re.sub(
+                                    r"[^a-zA-Z0-9\s-,\.]", "", publisher
+                                ).strip()
+                                publisher = titlecase(publisher)
                             elif re.search(r"publication date", th_item, re.IGNORECASE):
                                 published_date = td_item
                                 # convert published date from mm/dd/yyyy to yyyy-mm-dd
@@ -5677,8 +5790,249 @@ def text_search_barnes_and_noble(query):
     return clean_results
 
 
+def search_comic_vine(query, api_key, limit=None):
+    books = []
+    try:
+        session = Comicvine(api_key=api_key, cache=SQLiteCache())
+        results = session.search(
+            resource=ComicvineResource.ISSUE, query=query, max_results=30
+        )
+        if results:
+            for result in results:
+                try:
+                    isbn = ""
+                    api_url = ""
+                    summary = ""
+                    image_link = ""
+                    issue_id = ""
+                    volume_number = ""
+                    part = ""
+                    preview_link = ""
+                    series_name = ""
+                    published_date = ""
+                    year = ""
+                    month = ""
+                    day = ""
+                    title = ""
+                    name = ""
+                    writer = ""
+                    publisher = ""
+                    page_count = ""
+                    language = ""
+                    categories = []
+                    average_rating = ""
+                    is_ebook = True
+                    maturity_rating = ""
+                    series_id = "series_id:NONE"
+                    store_availability_status = "FOR_SALE"
+                    genres = []
+                    tags = []
+                    if hasattr(result, "site_url"):
+                        preview_link = result.site_url
+                        if preview_link:
+                            print("\tLink: " + preview_link)
+                    else:
+                        print("\t\t\t - No site_url")
+                    if hasattr(result, "name"):
+                        name = result.name
+                    if hasattr(result, "api_url"):
+                        api_url = result.api_url
+                    else:
+                        print("\t\t\t - No api_url")
+                    if hasattr(result, "description"):
+                        summary_search = result.description
+                        if summary_search:
+                            # unescape the summary
+                            summary_search = html.unescape(summary_search)
+                            # remove all html tags from the summary
+                            summary_search = re.sub(r"<[^>]*>", " ", summary_search)
+                            summary_search = re.sub(
+                                r"(Contents([-_. ]+)?Chapter.*)", "", summary_search
+                            )
+                            summary_search = remove_dual_space(summary_search).strip()
+                            if re.search(
+                                r"(^(Chapter([-_. ]+)?Titles.*)|(Chapter([-_. ]+)?Titles.*)$)",
+                                summary_search,
+                                re.IGNORECASE,
+                            ):
+                                summary_search = re.sub(
+                                    r"(^(Chapter([-_. ]+)?Titles.*)|(Chapter([-_. ]+)?Titles.*)$)",
+                                    "",
+                                    summary_search,
+                                    flags=re.IGNORECASE,
+                                )
+                            summary_search = remove_dual_space(summary_search).strip()
+                            if summary_search and len(summary_search) >= 3:
+                                summary = summary_search
+                    else:
+                        print("\t\t\t - No description")
+                    if hasattr(result, "image"):
+                        if hasattr(result.image, "original"):
+                            image_link = result.image.original
+                        else:
+                            print("\t\t\t - No original image inside of image_url")
+                    else:
+                        print("\t\t\t - No image")
+                    if hasattr(result, "issue_id"):
+                        issue_id = result.issue_id
+                        if issue_id:
+                            print("\t\tIssue ID: " + str(issue_id))
+                    else:
+                        print("\t\t\t - No id")
+                    if hasattr(result, "volume"):
+                        if hasattr(result.volume, "name"):
+                            series_name = result.volume.name
+                        else:
+                            print("\t\t\t - No name inside of volume")
+                    if hasattr(result, "number"):
+                        volume_number_search = result.number
+                        if volume_number_search:
+                            if re.search(r"-", volume_number_search):
+                                volume_number = convert_list_of_numbers_to_array(
+                                    volume_number_search
+                                )
+                            else:
+                                volume_number = set_num_as_float_or_int(
+                                    volume_number_search
+                                )
+                    else:
+                        print("\t\t\t - No volume number")
+                    if hasattr(result, "store_date"):
+                        published_date = result.store_date
+                        if published_date:
+                            year = published_date.year
+                            month = published_date.month
+                            day = published_date.day
+                            published_date = (
+                                str(year) + "-" + str(month) + "-" + str(day)
+                            )
+                            if re.search(r"(-+$)", published_date):
+                                published_date = re.sub(
+                                    r"(-+$)", "", published_date
+                                ).strip()
+                        else:
+                            published_date = ""
+                    else:
+                        print("\t\t\t - No store_date")
+                    if name and not volume_number:
+                        volume_search = re.search(
+                            r"([0-9]+(\.?[0-9]+)?([-_][0-9]+\.?[0-9]+)?)$",
+                            name,
+                        )
+                        if volume_search:
+                            volume_number = volume_search.group(1)
+                            if re.search(r"-", volume_number):
+                                volume_number = convert_list_of_numbers_to_array(
+                                    volume_number
+                                )
+                            else:
+                                volume_number = set_num_as_float_or_int(volume_number)
+                        elif (
+                            not contains_volume_keywords(name)
+                            and not contains_chapter_keywords(name)
+                            and not re.search(r"([0-9]+)", name)
+                        ):
+                            volume_number = 1
+                    if not part and name:
+                        part_search = get_volume_part(name)
+                        if part_search:
+                            part = part_search
+                    if name and not volume_number and not part:
+                        name = ""
+                    extracted_title = ""
+                    if summary:
+                        extracted_title = get_title_from_description(summary)
+                    volume_keyword = ""
+                    if isinstance(volume_number, list):
+                        volume_keyword = "Volumes "
+                    else:
+                        volume_keyword = "Volume "
+                    if extracted_title:
+                        title = titlecase(extracted_title.strip())
+                    elif volume_number and part:
+                        if isinstance(volume_number, list):
+                            title = (
+                                volume_keyword
+                                + str(
+                                    convert_array_to_string_with_dashes(volume_number)
+                                )
+                                + " Part "
+                                + str(part)
+                            )
+                        else:
+                            title = (
+                                volume_keyword
+                                + str(volume_number)
+                                + " Part "
+                                + str(part)
+                            )
+                    elif volume_number and not part:
+                        if isinstance(volume_number, list):
+                            title = volume_keyword + str(
+                                convert_array_to_string_with_dashes(volume_number)
+                            )
+                        else:
+                            title = volume_keyword + str(volume_number)
+                    if not language and summary:
+                        language = detect_language(summary)
+                    book = Book(
+                        isbn,
+                        title,
+                        series_name,
+                        volume_number,
+                        volume_number,
+                        summary,
+                        published_date,
+                        year,
+                        month,
+                        day,
+                        writer,
+                        publisher,
+                        page_count,
+                        categories,
+                        language,
+                        preview_link,
+                        [image_link],
+                        part,
+                        series_id,
+                        average_rating,
+                        is_ebook,
+                        preview_link,
+                        maturity_rating,
+                        store_availability_status,
+                        genres,
+                        tags,
+                    )
+                    books.append(book)
+                    if limit and len(books) == limit:
+                        break
+                except Exception as e:
+                    send_error_message(e)
+                    if hasattr(result, "issue_id"):
+                        send_error_message(
+                            "\tComic Vine Issue ID: " + str(result.issue_id)
+                        )
+                    elif issue_id:
+                        send_error_message("\tComic Vine Issue ID: " + str(issue_id))
+                    write_to_file("comic_vine_errors.txt", str(e))
+                    exc_type, exc_obj, exc_tb = sys.exc_info()
+                    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+                    print(exc_type, fname, exc_tb.tb_lineno)
+        else:
+            print("\t\t\t - No results found!")
+    except Exception as e:
+        send_error_message(e)
+        write_to_file("comic_vine_errors.txt", str(e))
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        print(exc_type, fname, exc_tb.tb_lineno)
+    return books
+
+
 # Searches the passes metadata provider
-def search_provider(file, file_path, multi_volume, extension, provider, dir_files=None):
+def search_provider(
+    file, file_path, multi_volume, extension, provider, zip_comment, dir_files=None
+):
     global series_ids_cache
     session_result = None
     epub_path = file_path
@@ -5702,70 +6056,80 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
     part = get_volume_part(file)
     part = set_num_as_float_or_int(part)
     directory = os.path.dirname(file_path)
-    if provider == "google":
-        in_cache = False
-        # check cache to see if the series is already in the cache
-        if series_ids_cache and series:
-            for item in series_ids_cache:
-                if item.series_name.lower().strip() == series.lower().strip():
-                    print("\tFound series name in cache!")
-                    in_cache = True
-                    series_info = item.results
-                    session_result = item
-                    break
-        if not in_cache:
-            dir_file_paths = [
-                os.path.join(directory, x)
-                for x in dir_files
-                if dir_files
-                and x
-                and os.path.isfile(os.path.join(directory, x))
-                and get_series_name_from_file_name(x).lower().strip()
-                == series.lower().strip()
-            ]
-            dir_file_series_ids = [
-                get_meta_from_file(x, r"series_id:.*", get_file_extension(x))
-                for x in dir_file_paths
-                if dir_file_paths and x
-            ]
-            # remove empty results from dir_file_series_ids
-            dir_file_series_ids = [x for x in dir_file_series_ids if x]
-            # remove all duplicates from dir_file_series_ids
-            dir_file_series_ids = list(set(dir_file_series_ids))
-            series_info = ""
-            if len(dir_file_series_ids) == 1:
-                dir_file_series_ids = dir_file_series_ids[0]
-            elif dir_file_series_ids and isinstance(dir_file_series_ids, str):
-                dir_file_series_ids = dir_file_series_ids
-            else:
-                dir_file_series_ids = ""
-            if dir_file_series_ids:
-                dir_file_series_ids = dir_file_series_ids.split("series_id:")[1]
-                series_id_in_cache = False
-                if series_ids_cache:
-                    for item in series_ids_cache:
-                        if item.series_id == dir_file_series_ids:
-                            print("\tFound series_id in cache!")
-                            series_id_in_cache = True
-                            series_info = item.results
-                            session_result = item
-                            break
-                elif dir_file_series_ids:
-                    print(
-                        "\tScraping series info for: id="
-                        + dir_file_series_ids
-                        + "\n\t\tmay take awhile depending on the number of volumes..."
-                    )
-                    series_info = scrape_series_ids(dir_file_series_ids)
-                    if series_info:
-                        session_result = Series_Page_Result(
-                            dir_file_series_ids, series, series_info, None
+    if provider.name == "google":
+        series_files = [
+            f
+            for f in os.listdir(directory)
+            if os.path.isfile(os.path.join(directory, f))
+        ]
+        if series_files:
+            series_files = remove_hidden_files(series_files)
+            series_files = remove_non_cbz_epub(series_files)
+            in_cache = False
+            # check cache to see if the series is already in the cache
+            if series_ids_cache and series:
+                for item in series_ids_cache:
+                    if item.series_name.lower().strip() == series.lower().strip():
+                        print("\tFound series name in cache!")
+                        in_cache = True
+                        series_info = item.results
+                        session_result = item
+                        break
+            if not in_cache:
+                dir_file_paths = [
+                    os.path.join(directory, x)
+                    for x in series_files
+                    if series_files
+                    and x
+                    and os.path.isfile(os.path.join(directory, x))
+                    and get_series_name_from_file_name(x).lower().strip()
+                    == series.lower().strip()
+                ]
+                dir_file_series_ids = [
+                    get_meta_from_file(x, r"series_id:.*", get_file_extension(x))
+                    for x in dir_file_paths
+                    if dir_file_paths and x
+                ]
+                # remove empty results from dir_file_series_ids
+                dir_file_series_ids = [x for x in dir_file_series_ids if x]
+                # remove all duplicates from dir_file_series_ids
+                dir_file_series_ids = list(set(dir_file_series_ids))
+                series_info = ""
+                if len(dir_file_series_ids) == 1:
+                    dir_file_series_ids = dir_file_series_ids[0]
+                elif dir_file_series_ids and isinstance(dir_file_series_ids, str):
+                    dir_file_series_ids = dir_file_series_ids
+                else:
+                    dir_file_series_ids = ""
+                if dir_file_series_ids:
+                    dir_file_series_ids = dir_file_series_ids.split("series_id:")[1]
+                    series_id_in_cache = False
+                    if series_ids_cache:
+                        for item in series_ids_cache:
+                            if item.series_id == dir_file_series_ids:
+                                print("\tFound series_id in cache!")
+                                series_id_in_cache = True
+                                series_info = item.results
+                                session_result = item
+                                break
+                    elif dir_file_series_ids:
+                        print(
+                            "\tScraping series info for: id="
+                            + dir_file_series_ids
+                            + "\n\t\tmay take awhile depending on the number of volumes..."
                         )
-                    else:
-                        print("\tNothing found")
+                        series_info = scrape_series_ids(dir_file_series_ids)
+                        if series_info:
+                            session_result = Series_Page_Result(
+                                dir_file_series_ids, series, series_info, None
+                            )
+                        else:
+                            print("\tNothing found")
+        else:
+            print("\tNo other files found in directory for series_id search.")
     if cover and not skip_image_comparison:
         print("\n----------------------------------------------------------------")
-        print("Attempt using string search and image comparison.")
+        print("Using string search and image comparison.")
         print("----------------------------------------------------------------")
         cleaned_results = []
         if series and volume_number:
@@ -5789,12 +6153,12 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                 search_four += " Light Novel"
             elif extension == "cbz":
                 search_four += " Manga"
-            print("\nSearching for: " + search)
+            print("\nSearching with: " + search)
             print("Cover Image: " + os.path.basename(cover_path))
             print("Required Image SSIM Score: " + str(required_image_ssim_score))
             print("Required Image MSE Score: " + str(required_image_mse_score))
             first_word_in_series = remove_punctuation(series.split(" ")[0])
-            if provider == "google":
+            if provider.name == "google":
                 if series_info and (
                     not session_result or not session_result.api_results
                 ):
@@ -5842,7 +6206,32 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     for result in session_result.api_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            if provider == "google":
+            if provider.name == "google":
+                # check the zip_comment for an isbn number
+                if zip_comment:
+                    print("\nChecking zip comment for isbn obtained elsewhere...")
+                    isbn = search_for_isbn(zip_comment, file)
+                    if isbn:
+                        print(
+                            "\tFound isbn in zip comment: "
+                            + str(isbn.isbn)
+                            + " , adding to list of results."
+                        )
+                        clean_google_result = clean_api_results(
+                            [isbn],
+                            volume_number,
+                            first_word_in_series,
+                            multi_volume,
+                            series,
+                            extension,
+                            skip_series_similarity=True,
+                            skip_vol_nums_equal=True,
+                            skip_categories_check=True,
+                        )
+                        for result in clean_google_result:
+                            if result not in cleaned_results:
+                                cleaned_results.append(result)
+            if provider.name == "google":
                 r = google_api_isbn_lookup(
                     0,
                     epub_path,
@@ -5866,7 +6255,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     for result in clean_r_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            # if provider == "google":
+            # if provider.name == "google":
             #     print("\nAdditional volume quoted search: " + search)
             #     b = google_api_isbn_lookup(
             #         0,
@@ -5892,7 +6281,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
             #         for result in clean_b_results:
             #             if result not in cleaned_results:
             #                 cleaned_results.append(result)
-            if provider == "google" and not limit_google_search:
+            if provider.name == "google" and not limit_google_search:
                 print("\nAdditional Search without volume Keyword: " + search_three)
                 no_volume_keyword_results = google_api_isbn_lookup(
                     0,
@@ -5947,7 +6336,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     for result in clean_no_volume_keyword_results_no_cat:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            if provider == "kobo" and scrape_kobo:
+            if provider.name == "kobo":
                 print("\nSearching Kobo with: " + search)
                 kobo_results = []
                 search_with_and_instead_of_amp = re.sub(r"&", "and", search)
@@ -5967,7 +6356,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         if data_result and data_result not in kobo_results:
                             kobo_results.append(data_result)
                         print(
-                            "\n\t\tsleeping for "
+                            "\n\t\tSleeping for "
                             + str(web_scrape_sleep_time)
                             + " seconds...\n"
                         )
@@ -5990,7 +6379,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     for result in clean_kobo_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            if provider == "bookwalker" and scrape_bookwalker:
+            if provider.name == "bookwalker":
                 bw_category = None
                 if extension == "epub":
                     bw_category = "l"
@@ -6007,7 +6396,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         if data_result and data_result not in bookwalker_results:
                             bookwalker_results.append(data_result)
                         print(
-                            "\n\t\tsleeping for "
+                            "\n\t\tSleeping for "
                             + str(web_scrape_sleep_time)
                             + " seconds...\n"
                         )
@@ -6028,7 +6417,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         if data_result and data_result not in bookwalker_results:
                             bookwalker_results.append(data_result)
                         print(
-                            "\n\t\tsleeping for "
+                            "\n\t\tSleeping for "
                             + str(web_scrape_sleep_time)
                             + " seconds...\n"
                         )
@@ -6050,7 +6439,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         if result not in cleaned_results:
                             cleaned_results.append(result)
             results_with_image_score = []
-            if provider == "barnes_and_noble" and scrape_barnes_and_noble:
+            if provider.name == "barnes_and_noble":
                 barnes_results = []
                 print("\nSearching Barnes and Noble with: " + search_five)
                 bn_search_results = text_search_barnes_and_noble(search_five)
@@ -6060,7 +6449,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         if data_result and data_result not in barnes_results:
                             barnes_results.append(data_result)
                         print(
-                            "\n\tsleeping for "
+                            "\n\tSleeping for "
                             + str(web_scrape_sleep_time)
                             + " seconds...\n"
                         )
@@ -6085,6 +6474,37 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     for result in clean_barnes_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
+            if (
+                provider.name == "comic_vine"
+                and comic_vine_api_key
+                and extension == "cbz"
+            ):
+                comic_vine_results = []
+                print("\nSearching Comic Vine with: " + search_five)
+                comic_vine_results = search_comic_vine(search_five, comic_vine_api_key)
+                print(
+                    "\n\tSleeping for " + str(comic_vine_sleep_time) + " seconds...\n"
+                )
+                time.sleep(comic_vine_sleep_time)
+                if comic_vine_results:
+                    clean_comic_vine_results = clean_api_results(
+                        comic_vine_results,
+                        volume_number,
+                        first_word_in_series,
+                        multi_volume,
+                        series,
+                        extension,
+                        skip_series_similarity=False,
+                        skip_vol_nums_equal=True,
+                        skip_omnibus_check=True,
+                        skip_categories_check=True,
+                        series_similarity_score=0.8,
+                    )
+                    if clean_comic_vine_results:
+                        clean_comic_vine_results = clean_comic_vine_results[:5]
+                        for result in clean_comic_vine_results:
+                            if result not in cleaned_results:
+                                cleaned_results.append(result)
             # remove any duplicate results from cleaned_results
             cleaned_results = list(dict.fromkeys(cleaned_results))
             if cleaned_results:
@@ -6137,7 +6557,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         print(exc_type, fname, exc_tb.tb_lineno)
                         continue
             else:
-                send_error_message("\tNo results found from online search.")
+                send_error_message("\tNo results left after heavy filtering.")
             if results_with_image_score:
                 results_with_image_score.sort(
                     key=lambda x: x.ssim_score,
@@ -6201,7 +6621,6 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         else:
                             volume_keyword = "Volume "
                             best_result.book.title = volume_keyword + str(volume_number)
-                    send_change_message("\n\tMatch found from provider: " + provider)
                     print("\t\tSeries: " + best_result.book.series)
                     if best_result.book.title:
                         send_discord_message("Title: " + best_result.book.title)
@@ -6230,7 +6649,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                     if best_result.ssim_score:
                         send_change_message("\t\tSSIM: " + str(best_result.ssim_score))
                     if best_result.psnr_score:
-                        send_change_message("\t\tPSNR: " + str(best_result.psnr_score))
+                        print("\t\tPSNR: " + str(best_result.psnr_score))
                     if best_result.mse_score:
                         send_change_message("\t\tMSE: " + str(best_result.mse_score))
                     if best_result.book.part:
@@ -6252,9 +6671,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         + str(required_image_mse_score)
                     )
                     if best_result.psnr_score:
-                        send_error_message(
-                            "\tPSNR Score: " + str(best_result.psnr_score)
-                        )
+                        print("\tPSNR Score: " + str(best_result.psnr_score))
                     if best_result.image_link:
                         print("\tImage Link: " + best_result.image_link)
                     if best_result.book.api_link:
@@ -6267,9 +6684,6 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                         print("\tISBN: " + str(best_result.book.isbn))
                     if best_result.book.preview_link:
                         print("\tLink: " + best_result.book.preview_link[0])
-                    send_error_message(
-                        "\tNo match found from provider: " + provider + "\n"
-                    )
                     write_to_file(
                         "items_not_found_through_image_comparision_search.txt",
                         epub_path,
@@ -6305,7 +6719,7 @@ def search_provider(file, file_path, multi_volume, extension, provider, dir_file
                                 skip_print=True,
                             )
             else:
-                send_error_message("\tNo valid results found")
+                # send_error_message("\tNo image score results.")
                 write_to_file(
                     "items_not_found_through_image_comparision_search.txt",
                     epub_path,
@@ -6438,6 +6852,13 @@ def get_creation_age(file):
     return int(time.time() - os.path.getctime(file)) / 60
 
 
+# regex out underscore from passed string and return it
+def remove_underscore_from_name(name):
+    name = re.sub(r"_", " ", name)
+    name = remove_dual_space(name).strip()
+    return name
+
+
 def process_file(file_name, files):
     file_path = os.path.join(root, file_name)
     zip_comments = str(get_zip_comment(file_path))
@@ -6445,8 +6866,8 @@ def process_file(file_name, files):
     if skip_volumes_older_than_x_time and os.path.isfile(file_path):
         modification_age = get_modiciation_age(file_path)
         creation_age = get_creation_age(file_path)
-        if modification_age >= 30 and creation_age >= 30:
-            print("Skipping because it is older than 30 minutes")
+        if modification_age >= 60 and creation_age >= 60:
+            print("Skipping because it is older than 60 minutes")
             return None
     try:
         multi_volume = check_for_multi_volume_file(file_name)
@@ -6476,17 +6897,21 @@ def process_file(file_name, files):
                 contains_comic_info = check_if_zip_file_contains_comic_info_xml(
                     file_path
                 )
-                if (
-                    contains_comic_info
-                    and skip_all_non_comic_tagger_tagged
-                    and not skip_if_file_contains_comic_info
-                ):
+                if contains_comic_info:
                     comic_info_contents = get_comic_info_xml(file_path)
-                    if comic_info_contents:
-                        if not re.search(
-                            r"ComicTagger", comic_info_contents, re.IGNORECASE
-                        ):
-                            print("\tnot tagged by comictagger, skipping...")
+                    if (
+                        skip_all_non_comic_tagger_tagged
+                        and not skip_if_file_contains_comic_info
+                    ):
+                        if comic_info_contents:
+                            if not re.search(
+                                r"ComicTagger", comic_info_contents, re.IGNORECASE
+                            ):
+                                print("\tnot tagged by comictagger, skipping...")
+                                return None
+                    if skip_google_metadata and comic_info_contents:
+                        if re.search(r"googleapis", comic_info_contents, re.IGNORECASE):
+                            print("\tcontains google metadata, skipping...")
                             return None
                 elif (
                     not contains_comic_info
@@ -6516,16 +6941,22 @@ def process_file(file_name, files):
                 + "\n--------------------------------------------------------------------------------"
             )
             for provider in providers:
-                result = search_provider(
-                    file_name,
-                    file_path,
-                    multi_volume,
-                    extension,
-                    provider,
-                    dir_files=files,
-                )
-                if result:
-                    break
+                if provider.enabled:
+                    send_change_message(
+                        "\nSearching Provider: "
+                        + titlecase(remove_underscore_from_name(provider.name))
+                    )
+                    result = search_provider(
+                        file_name,
+                        file_path,
+                        multi_volume,
+                        extension,
+                        provider,
+                        zip_comments,
+                        dir_files=files,
+                    )
+                    if result:
+                        break
             if not result and (not only_image_comparision or extension == "cbz"):
                 print(
                     "----------------------------------------------------------------"
@@ -6708,20 +7139,66 @@ if __name__ == "__main__":
             skip_volumes_older_than_x_time = True
         else:
             skip_volumes_older_than_x_time = False
+    if args.scrape_google:
+        # find google provider in providers list
+        if args.scrape_google.lower() == "true":
+            for provider in providers:
+                if provider.name == "google":
+                    provider.enabled = True
+                    break
+        elif args.scrape_google.lower() == "false":
+            for provider in providers:
+                if provider.name == "google":
+                    provider.enabled = False
+                    break
     if args.scrape_bookwalker:
+        # find bookwalker provider in providers list
         if args.scrape_bookwalker.lower() == "true":
-            scrape_bookwalker = True
+            for provider in providers:
+                if provider.name == "bookwalker":
+                    provider.enabled = True
+                    break
         elif args.scrape_bookwalker.lower() == "false":
-            scrape_bookwalker = False
-        else:
-            scrape_bookwalker = False
+            for provider in providers:
+                if provider.name == "bookwalker":
+                    provider.enabled = False
+                    break
     if args.scrape_kobo:
+        # find kobo provider in providers list
         if args.scrape_kobo.lower() == "true":
-            scrape_kobo = True
+            for provider in providers:
+                if provider.name == "kobo":
+                    provider.enabled = True
+                    break
         elif args.scrape_kobo.lower() == "false":
-            scrape_kobo = False
-        else:
-            scrape_kobo = False
+            for provider in providers:
+                if provider.name == "kobo":
+                    provider.enabled = False
+                    break
+    if args.scrape_barnes_and_noble:
+        # find barnes and noble provider in providers list
+        if args.scrape_barnes_and_noble.lower() == "true":
+            for provider in providers:
+                if provider.name == "barnes_and_noble":
+                    provider.enabled = True
+                    break
+        elif args.scrape_barnes_and_noble.lower() == "false":
+            for provider in providers:
+                if provider.name == "barnes_and_noble":
+                    provider.enabled = False
+                    break
+    if args.scrape_comic_vine:
+        # find comic vine provider in providers list
+        if args.scrape_comic_vine.lower() == "true":
+            for provider in providers:
+                if provider.name == "comic_vine":
+                    provider.enabled = True
+                    break
+        elif args.scrape_comic_vine.lower() == "false":
+            for provider in providers:
+                if provider.name == "comic_vine":
+                    provider.enabled = False
+                    break
     if args.skip_volume_if_already_has_anilist_id:
         if args.skip_volume_if_already_has_anilist_id.lower() == "true":
             skip_volume_if_already_has_anilist_id = True
@@ -6729,13 +7206,14 @@ if __name__ == "__main__":
             skip_volume_if_already_has_anilist_id = False
         else:
             skip_volume_if_already_has_anilist_id = False
-    if args.scrape_barnes_and_noble:
-        if args.scrape_barnes_and_noble.lower() == "true":
-            scrape_barnes_and_noble = True
-        elif args.scrape_barnes_and_noble.lower() == "false":
-            scrape_barnes_and_noble = False
+    if args.skip_google_metadata:
+        if args.skip_google_metadata.lower() == "true":
+            skip_google_metadata = True
+        elif args.skip_google_metadata.lower() == "false":
+            skip_google_metadata = False
         else:
-            scrape_barnes_and_noble = False
+            skip_google_metadata = False
+    stop = False
     if args.path or args.file:
         # args.file = "/srv/dev-disk-by-uuid-4da94d03-b430-471f-af24-6a27bf7fee2e/manga/public/World's End Harem - Fantasia/World's End Harem - Fantasia v07 (2022) (Digital) (LuCaZ).cbz"
         if args.file:
@@ -6759,12 +7237,14 @@ if __name__ == "__main__":
                 files = remove_hidden_files(files)
                 files = remove_non_cbz_epub(files)
                 result = None
-                if files:
+                if files and not stop:
                     if multi_process_files and len(files) > 1:
                         with concurrent.futures.ThreadPoolExecutor(
                             max_workers=2
                         ) as executer:
                             result = executer.map(process_file, files)
+                        if args.file:
+                            stop = True
                     else:
                         for file in files:
                             print(
@@ -6774,11 +7254,12 @@ if __name__ == "__main__":
                                 + "\n--------------------------------------------------------------------------------"
                             )
                             process_result = process_file(file, files)
+                            if args.file:
+                                stop = True
+                                break
+                elif stop:
+                    break
         else:
             send_error_message("Directory does not exist: " + args.path)
-
     else:
         send_error_message("No image path or zip file provided")
-        parser.print_help()
-        exit(0)
-    exit(0)
