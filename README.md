@@ -3,4 +3,6 @@ An automation script that takes cbz manga and epub light novel files, searches t
 
 The script is currently use at your own risk. It is not currently user friendly. I need to clean up some code, do a more proper readme with all the available options, and cleanup/fix the requirements. Give me some time.
 
-Currently requires extracted covers alongside the .cbz and .epub files for the image similarity search with various providers. Parsing the internal isbn does not require this. You can provide your own or use https://github.com/zachstultz/komga-cover-extractor, I will add support for loading them from within the file itself, thus elimating this requirement. 
+Currently can use either an external cover file with the same name as the cbz/epub file or it can find an internal one and use that for an image similarity match result. 
+
+Parsing the internal isbn does not require this.
