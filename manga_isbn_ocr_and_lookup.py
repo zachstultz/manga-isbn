@@ -55,7 +55,7 @@ from simyan.comicvine import Comicvine, ComicvineResource
 # wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && pip3 install webdriver-manager && pip3 install regex && pip3 install bs4 && pip3 install selenium && rm google-chrome-stable_current_amd64.deb
 
 # downoads required items for nltk.tokenize
-# nltk.download("punkt")
+nltk.download("punkt")
 # The root direcotry for saving of images
 ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 # Accepted internal zip image extensions
@@ -521,7 +521,10 @@ def find_all_searches(extracted_texts, file):
 def get_zip_comment(zip_file):
     try:
         with zipfile.ZipFile(zip_file, "r") as zip_ref:
-            return zip_ref.comment.decode("utf-8")
+            if zip_ref.comment:
+                return zip_ref.comment.decode("utf-8")
+            else:
+                return ""
     except Exception as e:
         send_error_message(str(e))
         send_error_message("\tFailed to get zip comment for: " + zip_file)
@@ -1402,7 +1405,10 @@ def google_api_isbn_lookup(
                     if "publisher" in volume_info:
                         publisher = volume_info["publisher"]
                         publisher = re.sub(
-                            r"(,\s+|)?((LLC|Inc).*)", "", publisher, flags=re.IGNORECASE
+                            r"(,\s+|)?((LLC|Inc|\bCo\b).*)",
+                            "",
+                            publisher,
+                            flags=re.IGNORECASE,
                         ).strip()
                         publisher = re.sub(r"[^a-zA-Z0-9\s-,\.]", "", publisher).strip()
                         publisher = titlecase(publisher)
@@ -2276,7 +2282,7 @@ def clean_below_similarity_score(
                                 send_change_message(
                                     '\n\t\tSentence:\n\t\t"'
                                     + sentence
-                                    + '"\n\t\tIs similar to:\n\t\t"'
+                                    + '"\n\t\t\tIs similar to:\n\t\t"'
                                     + compare_sentence
                                     + '"\n\t\t\twith a score of '
                                     + str(sentences_similarity_score)
@@ -3131,12 +3137,12 @@ def compare_metadata(book, epub_path, files):
                         "Index Number",
                         "-i",
                     )
-                else:
-                    if not isinstance(book.number, list):
-                        cbz_changes.append("volume=" + str(book.number))
-                    else:
-                        cbz_changes.append("volume=" + str(book.number[0]))
-                    data_comparison.append(data.number)
+                # else:
+                #     if not isinstance(book.number, list):
+                #         cbz_changes.append("volume=" + str(book.number))
+                #     else:
+                #         cbz_changes.append("volume=" + str(book.number[0]))
+                #     data_comparison.append(data.number)
             if extension == "cbz" and data.issue != book.number:
                 if not issue_string:
                     cbz_changes.append("issue=" + str(book.number))
@@ -3982,6 +3988,7 @@ def clean_api_results(
     skip_categories_check=False,
     skip_summary_check=False,
     series_similarity_score=0.4,
+    skip_language_check=False,
 ):
     if results:
         if not isinstance(results, list):
@@ -4205,6 +4212,28 @@ def clean_api_results(
                 else:
                     print("\t\tFailed summary check")
                     print("\t\t\tNo summary field present or empty summary.")
+                    passed = False
+            if not skip_language_check:
+                if hasattr(result, "language"):
+                    if result.language == "en" or result.language == "eng":
+                        print("\t\tPassed language check")
+                    else:
+                        passed = False
+                        print("\t\tFailed language check")
+                        print("\t\t\tLanguage: " + result.language)
+                elif hasattr(result, "summary"):
+                    detected_language = detect_language(result.summary)
+                    if detected_language == "en":
+                        print("\t\tPassed language check")
+                    else:
+                        passed = False
+                        print("\t\tFailed language check")
+                        print(
+                            "\t\t\tDetected Language on Summary: " + detected_language
+                        )
+                else:
+                    print("\t\tFailed language check")
+                    print("\t\t\tNo language field present.")
                     passed = False
             if passed:
                 print("\t\t-----Passed all checks-----")
@@ -4555,6 +4584,11 @@ def get_meta_from_file(file, search_regex, extension):
             if search:
                 result = search.group(0)
                 result = re.sub(r"(series_id:NONE)", "", result, flags=re.IGNORECASE)
+                search_two = re.search(search_regex, result, re.IGNORECASE)
+                if search_two:
+                    result = search_two.group(0)
+                else:
+                    result = ""
                 if re.search(r"(series_id:.*,)", result, re.IGNORECASE):
                     result = re.sub(r",.*", "", result).strip()
     return result
@@ -4835,7 +4869,7 @@ def get_kobo_books_meta(
                             ).strip()
                             if publisher:
                                 publisher = re.sub(
-                                    r"(,\s+|)?((LLC|Inc).*)",
+                                    r"(,\s+|)?((LLC|Inc|\bCo\b).*)",
                                     "",
                                     publisher,
                                     flags=re.IGNORECASE,
@@ -5261,7 +5295,7 @@ def get_bookwalker_books_meta(link):
                                         if td_item_text:
                                             publisher = td_item_text
                                             publisher = re.sub(
-                                                r"(,\s+|)?((LLC|Inc).*)",
+                                                r"(,\s+|)?((LLC|Inc|\bCo\b).*)",
                                                 "",
                                                 publisher,
                                                 flags=re.IGNORECASE,
@@ -5629,7 +5663,7 @@ def get_barnes_and_noble_books_meta(link, skip=False, data=None):
                             elif re.search(r"publisher", th_item, re.IGNORECASE):
                                 publisher = td_item
                                 publisher = re.sub(
-                                    r"(,\s+|)?((LLC|Inc).*)",
+                                    r"(,\s+|)?((LLC|Inc|\bCo\b).*)",
                                     "",
                                     publisher,
                                     flags=re.IGNORECASE,
@@ -5847,7 +5881,7 @@ def search_comic_vine(query, api_key, limit=None):
                             # remove all html tags from the summary
                             summary_search = re.sub(r"<[^>]*>", " ", summary_search)
                             summary_search = re.sub(
-                                r"(Contents([-_. ]+)?Chapter.*)", "", summary_search
+                                r"(Contents([-_. ]+)?(Chapter)?.*)", "", summary_search
                             )
                             summary_search = remove_dual_space(summary_search).strip()
                             if re.search(
