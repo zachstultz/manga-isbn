@@ -45,6 +45,7 @@ from math import log10, sqrt
 from simyan.comicvine import Comicvine
 from simyan.sqlite_cache import SQLiteCache
 from simyan.comicvine import Comicvine, ComicvineResource
+from lxml import etree
 
 # Version: 1.01
 
@@ -183,8 +184,11 @@ skip_volume_if_already_has_anilist_id = False
 # whether or not to translate title names to improve matching when
 # matching to anilist
 translate_titles = False
-
+# the cache for series_id results to avoid unncessary api hits
 series_ids_cache = []
+# True = image similarity uses internal file cover
+# False = image similarity uses external file cover
+use_internal_cover = True
 
 # Skips any files that were tagged by google books
 skip_google_metadata = False
@@ -314,6 +318,18 @@ def image_arg_parser():
         "-sgm",
         "--skip_google_metadata",
         help="If enabled, the program will skip files that already have google metadata.",
+        required=False,
+    )
+    parser.add_argument(
+        "-s",
+        "--sort",
+        help="If enabled, the program will sort the files and folders alphabetically, useful when debugging, not reccomended for fastest file seek.",
+        required=False,
+    )
+    parser.add_argument(
+        "-uic",
+        "--use_internal_cover",
+        help="If enabled, the program will use the internal cover for image similarity.",
         required=False,
     )
     return parser
@@ -4317,8 +4333,13 @@ def process_image_link_temp_for_anilist(cover_path, link):
         return None
 
 
-def process_image_link(result, cover_path, link):
-    cover_image = cv2.imread(cover_path)
+def process_image_link(result, cover_path, link, internal_cover_data):
+    cover_image = None
+    if internal_cover_data:
+        cover_image = Image.open(io.BytesIO(internal_cover_data))
+        cover_image = np.array(cover_image)
+    elif cover_path:
+        cover_image = cv2.imread(cover_path)
     online_image = ""
     print(
         "\t\t\tImage Link "
@@ -6063,6 +6084,134 @@ def search_comic_vine(query, api_key, limit=None):
     return books
 
 
+# Credit to original source: https://alamot.github.io/epub_cover/
+# Modified by me.
+# Retrieves the inner epub cover
+def get_epub_cover(epub_path):
+    try:
+        namespaces = {
+            "calibre": "http://calibre.kovidgoyal.net/2009/metadata",
+            "dc": "http://purl.org/dc/elements/1.1/",
+            "dcterms": "http://purl.org/dc/terms/",
+            "opf": "http://www.idpf.org/2007/opf",
+            "u": "urn:oasis:names:tc:opendocument:xmlns:container",
+            "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+        }
+        with zipfile.ZipFile(epub_path) as z:
+            t = etree.fromstring(z.read("META-INF/container.xml"))
+            rootfile_path = t.xpath(
+                "/u:container/u:rootfiles/u:rootfile", namespaces=namespaces
+            )[0].get("full-path")
+            t = etree.fromstring(z.read(rootfile_path))
+            cover_id = t.xpath(
+                "//opf:metadata/opf:meta[@name='cover']", namespaces=namespaces
+            )[0].get("content")
+            cover_href = t.xpath(
+                "//opf:manifest/opf:item[@id='" + cover_id + "']", namespaces=namespaces
+            )[0].get("href")
+            if re.search(r"%", cover_href):
+                cover_href = urllib.parse.unquote(cover_href)
+            cover_path = os.path.join(os.path.dirname(rootfile_path), cover_href)
+            return cover_path
+        return None
+    except Exception as e:
+        return None
+
+
+# remove all non-images from list of files
+def remove_non_images(files):
+    clean_list = []
+    for file in files:
+        extension = re.sub(r"\.", "", get_file_extension(os.path.basename(file)))
+        if extension in image_extensions:
+            clean_list.append(file)
+    return clean_list
+
+
+def find_internal_cover(file, path, extension, root, extensionless_name):
+    data = None
+    # check if the file is a valid zip file
+    extension = "." + extension
+    if zipfile.is_zipfile(path):
+        epub_cover_path = ""
+        if extension == ".epub":
+            epub_cover_path = get_epub_cover(path)
+            if epub_cover_path:
+                epub_cover_path = os.path.basename(epub_cover_path)
+                epub_cover_extension = re.sub(
+                    r"\.", "", get_file_extension(epub_cover_path)
+                )
+                if epub_cover_extension not in image_extensions:
+                    epub_cover_path = ""
+        with zipfile.ZipFile(path, "r") as zip_ref:
+            zip_list = zip_ref.namelist()
+            zip_list = [
+                x
+                for x in zip_list
+                if not os.path.basename(x).startswith(".")
+                and not os.path.basename(x).startswith("__")
+            ]
+            zip_list = remove_non_images(zip_list)
+            # remove anything that isn't a file
+            zip_list = [
+                x for x in zip_list if not x.endswith("/") and re.search(r"\.", x)
+            ]
+            # remove any non-supported image files from the list
+            for item in zip_list:
+                extension = get_file_extension(item)
+                extension = re.sub(r"\.", "", extension)
+                if extension not in image_extensions:
+                    zip_list.remove(item)
+            zip_list.sort()
+            # parse zip_list and check each os.path.basename for epub_cover_path if epub_cover_path exists, then put it at the front of the list
+            if epub_cover_path:
+                for item in zip_list:
+                    if os.path.basename(item) == epub_cover_path:
+                        zip_list.remove(item)
+                        zip_list.insert(0, item)
+                        break
+            if zip_list:
+                for image_file in zip_list:
+                    if (
+                        epub_cover_path
+                        and os.path.basename(image_file) == epub_cover_path
+                        or re.search(
+                            r"(\b(Cover([0-9]+|)|CoverDesign)\b)",
+                            image_file,
+                            re.IGNORECASE,
+                        )
+                        or re.search(
+                            r"(\b(p000|page_000)\b)", image_file, re.IGNORECASE
+                        )
+                        or re.search(r"((\s+)0+\.(.{2,}))", image_file, re.IGNORECASE)
+                        or re.search(
+                            r"(\bindex[-_. ]1[-_. ]1\b)", image_file, re.IGNORECASE
+                        )
+                        or re.search(
+                            r"(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})",
+                            image_file,
+                            re.IGNORECASE,
+                        )
+                    ):
+                        print("\tInternal Cover: " + image_file)
+                        with zip_ref.open(image_file) as image_file_ref:
+                            data = image_file_ref.read()
+                            # close the file
+                            image_file_ref.close()
+                            return data
+                    print("\tNo cover found, defaulting to first image: " + zip_list[0])
+                    print("\tInternal Cover: " + image_file)
+                    default_cover_path = zip_list[0]
+                    with zip_ref.open(default_cover_path) as default_cover_ref:
+                        data = default_cover_ref.read()
+                        # close the file
+                        default_cover_ref.close()
+                        return data
+    else:
+        send_error_message("\nFile: " + file + " is not a valid zip file.")
+    return data
+
+
 # Searches the passes metadata provider
 def search_provider(
     file, file_path, multi_volume, extension, provider, zip_comment, dir_files=None
@@ -6070,11 +6219,31 @@ def search_provider(
     global series_ids_cache
     session_result = None
     epub_path = file_path
+    extenionless_name = get_extensionless_name(file)
     cover = find_cover(file_path)
+    cover_path = ""
+    internal_cover_data = None
+    if use_internal_cover:
+        internal_cover_data = find_internal_cover(
+            file, file_path, extension, root, extenionless_name
+        )
     if not cover:
-        send_error_message("No cover found for: " + file)
-        return
-    cover_path = os.path.join(root, cover)
+        print("\t\tNo external cover found.")
+        if not internal_cover_data and use_internal_cover:
+            print("\t\tNo internal cover found.")
+            return None
+        elif not internal_cover_data and not use_internal_cover:
+            print(
+                "\t\tuse_internal_cover is disabled and no external cover was found, skipping..."
+            )
+            return None
+        else:
+            print("\t\tUsing internal cover")
+    else:
+        cover_path = os.path.join(root, cover)
+        print("\tExternal Cover: " + os.path.basename(cover_path))
+        if use_internal_cover:
+            print("\n\tUsing internal cover.")
     series = get_series_name_from_file_name(file)
     volume_number = remove_everything_but_volume_num([file])
     if volume_number:
@@ -6090,7 +6259,11 @@ def search_provider(
     part = get_volume_part(file)
     part = set_num_as_float_or_int(part)
     directory = os.path.dirname(file_path)
+    send_change_message(
+        "\nSearching Provider: " + titlecase(remove_underscore_from_name(provider.name))
+    )
     if provider.name == "google":
+        print("\tSearching folder files for a common series_id...")
         series_files = [
             f
             for f in os.listdir(directory)
@@ -6104,7 +6277,7 @@ def search_provider(
             if series_ids_cache and series:
                 for item in series_ids_cache:
                     if item.series_name.lower().strip() == series.lower().strip():
-                        print("\tFound series name in cache!")
+                        print("\tFound series in cache!")
                         in_cache = True
                         series_info = item.results
                         session_result = item
@@ -6161,7 +6334,7 @@ def search_provider(
                             print("\tNothing found")
         else:
             print("\tNo other files found in directory for series_id search.")
-    if cover and not skip_image_comparison:
+    if (cover or internal_cover_data) and not skip_image_comparison:
         print("\n----------------------------------------------------------------")
         print("Using string search and image comparison.")
         print("----------------------------------------------------------------")
@@ -6188,7 +6361,8 @@ def search_provider(
             elif extension == "cbz":
                 search_four += " Manga"
             print("\nSearching with: " + search)
-            print("Cover Image: " + os.path.basename(cover_path))
+            if cover_path and not use_internal_cover:
+                print("Cover Image: " + os.path.basename(cover_path))
             print("Required Image SSIM Score: " + str(required_image_ssim_score))
             print("Required Image MSE Score: " + str(required_image_mse_score))
             first_word_in_series = remove_punctuation(series.split(" ")[0])
@@ -6563,9 +6737,7 @@ def search_provider(
                             if not multi_process_image_links:
                                 for link in result.image_links:
                                     image_result = process_image_link(
-                                        result,
-                                        cover_path,
-                                        link,
+                                        result, cover_path, link, internal_cover_data
                                     )
                                     if image_result:
                                         results_with_image_score.append(image_result)
@@ -6575,6 +6747,7 @@ def search_provider(
                                         process_image_link,
                                         result,
                                         cover_path,
+                                        internal_cover_data,
                                     )
                                     results = executor.map(
                                         worker,
@@ -6976,10 +7149,6 @@ def process_file(file_name, files):
             )
             for provider in providers:
                 if provider.enabled:
-                    send_change_message(
-                        "\nSearching Provider: "
-                        + titlecase(remove_underscore_from_name(provider.name))
-                    )
                     result = search_provider(
                         file_name,
                         file_path,
@@ -6991,6 +7160,8 @@ def process_file(file_name, files):
                     )
                     if result:
                         break
+                else:
+                    print("\t" + provider.name + " is disabled, skipping...")
             if not result and (not only_image_comparision or extension == "cbz"):
                 print(
                     "----------------------------------------------------------------"
@@ -7247,6 +7418,11 @@ if __name__ == "__main__":
             skip_google_metadata = False
         else:
             skip_google_metadata = False
+    if args.use_internal_cover:
+        if args.use_internal_cover.lower() == "true":
+            use_internal_cover = True
+        elif args.use_internal_cover.lower() == "false":
+            use_internal_cover = False
     stop = False
     if args.path or args.file:
         # args.file = "/srv/dev-disk-by-uuid-4da94d03-b430-471f-af24-6a27bf7fee2e/manga/public/World's End Harem - Fantasia/World's End Harem - Fantasia v07 (2022) (Digital) (LuCaZ).cbz"
@@ -7264,8 +7440,9 @@ if __name__ == "__main__":
                     ]
                 if args.file:
                     files = [os.path.basename(args.file)]
-                # dirs.sort()
-                # files.sort()
+                if args.sort and args.sort.lower() == "true":
+                    dirs.sort()
+                    files.sort()
                 remove_ignored_folders(dirs)
                 dirs = remove_hidden_folders(dirs)
                 files = remove_hidden_files(files)
