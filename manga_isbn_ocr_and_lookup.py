@@ -34,7 +34,7 @@ from titlecase import titlecase
 from langcodes import *
 from functools import partial
 from bs4 import BeautifulSoup, SoupStrainer
-from discord_webhook import DiscordWebhook
+from discord_webhook import DiscordWebhook, DiscordEmbed
 from langdetect import detect
 from nltk.tokenize import sent_tokenize
 from selenium import webdriver
@@ -50,7 +50,7 @@ from lxml import etree
 # Version: 1.01
 
 # RUN THESE INSTALLS FOR THE PROGRAM TO WORK PROPERLY!
-# sudo apt-get update && sudo pip3 install comictagger[all] && sudo apt-get install calibre && sudo apt-get install wget && sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin && sudo apt-get install tesseract-ocr
+# sudo apt-get update && sudo apt-get install python3-icu && sudo apt-get install libopengl0 && sudo pip3 install comictagger[all] && pip3 install translators && pip3 install simyan && sudo apt-get install calibre && sudo apt-get install wget && sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin && sudo apt-get install tesseract-ocr
 
 # REQUIRES CHROME TO BE INSTALLED!
 # wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && pip3 install webdriver-manager && pip3 install regex && pip3 install bs4 && pip3 install selenium && rm google-chrome-stable_current_amd64.deb
@@ -92,6 +92,8 @@ multi_process_image_links = False
 multi_process_files = False
 # Whether or not to apply multi-processing when pulling descriptions from a file list of epubs
 multi_process_pulling_descriptions = True
+# Whether or not to multi-process the internal files of a file for an internal isbn number
+multi_process_internal_files_for_isbn_search = True
 # if we should skip letters A-#
 skip_letters = False
 # The letters that our dirs are allowed to begin with, aka, skip directly to M-Z dirs within the root.
@@ -164,7 +166,7 @@ api_hits = 0
 # the total amount of retries for an api request
 total_api_re_attempts = 10
 # required image similarity score for image similarity
-required_image_ssim_score = 0.60
+required_image_ssim_score = 0.75
 # the required mse score to indicate a good match
 required_image_mse_score = 0.37
 # The required string similarity score using similar method
@@ -188,10 +190,19 @@ translate_titles = False
 series_ids_cache = []
 # True = image similarity uses internal file cover
 # False = image similarity uses external file cover
-use_internal_cover = True
+use_internal_cover = False
 
 # Skips any files that were tagged by google books
 skip_google_metadata = False
+
+# False = only is_ebook = True, aka, digital results will only be accepted (reccomended)
+# True = both digital and paperback results will be accepted
+#
+# False is reccomended because paperback metadata can be both outdated and not preferred. By not preferred,
+# a paperback volume 9 metadata for example, could either be about the series as a whole, or about that particular volume.
+# You want metadata that is about the volume itself, digital will always provide that, paperback only
+# sometimes provides that.
+allow_non_is_ebook_results = False
 
 # argument parser
 def image_arg_parser():
@@ -363,8 +374,10 @@ class Book:
         api_link,
         maturity_rating,
         for_sale,
+        provider,
         genres=[],
         tags=[],
+        series_id_order_number="",
     ):
         self.isbn = isbn
         self.title = title
@@ -381,7 +394,7 @@ class Book:
         self.page_count = page_count
         self.categories = categories
         self.language = language
-        self.preview_link = (preview_link,)
+        self.preview_link = preview_link
         self.image_links = image_links
         self.part = part
         self.series_id = series_id
@@ -390,8 +403,10 @@ class Book:
         self.api_link = api_link
         self.maturity_rating = maturity_rating
         self.for_sale = for_sale
+        self.provider = provider
         self.genres = genres
         self.tags = tags
+        self.series_id_order_number = series_id_order_number
 
 
 class Series_Page_Result:
@@ -410,19 +425,45 @@ class Result:
 
 
 class Provider:
-    def __init__(self, name, enabled, priority_number):
+    def __init__(self, name, enabled, priority_number, icon_url):
         self.name = name
         self.enabled = enabled
         self.priority_number = priority_number
+        self.icon_url = icon_url
 
 
 # our current list of supported metadata providers
 providers = [
-    Provider("google", True, 1),
-    Provider("bookwalker", True, 2),
-    Provider("kobo", False, 3),
-    Provider("barnes_and_noble", True, 4),
-    Provider("comic_vine", True, 5),
+    Provider(
+        "google-books",
+        True,
+        1,
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Google_%22G%22_Logo.svg/1024px-Google_%22G%22_Logo.svg.png",
+    ),
+    Provider(
+        "bookwalker",
+        True,
+        2,
+        "https://play-lh.googleusercontent.com/a7jUyjTxWrl_Kl1FkUSv2FHsSu3Swucpem2UIFDRbA1fmt5ywKBf-gcwe6_zalOqIR7V",
+    ),
+    Provider(
+        "kobo",
+        False,
+        3,
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Rakuten_Kobo_Logo_2019.svg/1920px-Rakuten_Kobo_Logo_2019.svg.png",
+    ),
+    Provider(
+        "barnes_and_noble",
+        True,
+        4,
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Barnes_and_Noble_logo.svg/2560px-Barnes_and_Noble_logo.svg.png",
+    ),
+    Provider(
+        "comic_vine",
+        True,
+        5,
+        "https://comicvine.gamespot.com/a/bundles/comicvinesite/images/logo.png",
+    ),
 ]
 
 # order providers by priority, lowest number first
@@ -445,17 +486,82 @@ def send_change_message(message):
     write_to_file("changes.txt", message)
 
 
+last_hook_index = None
+
 # Sends a discord message using the users webhook url
-def send_discord_message(message):
+def send_discord_message(
+    message,
+    title=None,
+    url=None,
+    rate_limit=True,
+    color=None,
+    proxies={},
+    fields=[],
+    timestamp=True,
+    author=None,
+    image_url=None,
+    thumbnail_url=None,
+):
+    hook = None
+    global discord_webhook_url
+    global last_hook_index
+    if discord_webhook_url:
+        if not last_hook_index and last_hook_index != 0:
+            hook = discord_webhook_url[0]
+        else:
+            if last_hook_index == len(discord_webhook_url) - 1:
+                hook = discord_webhook_url[0]
+            else:
+                hook = discord_webhook_url[last_hook_index + 1]
+    if hook:
+        last_hook_index = discord_webhook_url.index(hook)
+
+    webhook = DiscordWebhook()
+    embed = None
     try:
-        if discord_webhook_url:
-            webhook = DiscordWebhook(
-                url=random.choice(discord_webhook_url),
-                content=message,
-                rate_limit_retry=True,
-            )
-            webhook.execute()
-    except TypeError as e:
+        if hook:
+            if color and not embed:
+                embed = DiscordEmbed()
+                embed.color = color
+            elif color and embed:
+                embed.color = color
+            if title and not embed:
+                embed = DiscordEmbed()
+                embed.title = title
+            elif title and embed:
+                embed.title = title
+            if message and not embed:
+                webhook.content = message
+            elif message and embed:
+                embed.description = message
+            webhook.url = hook
+            if rate_limit:
+                webhook.rate_limit_retry = rate_limit
+            if embed:
+                if image_url:
+                    embed.set_image(url=image_url)
+                if thumbnail_url:
+                    embed.set_thumbnail(url=thumbnail_url)
+                if fields:
+                    for field in fields:
+                        embed.add_embed_field(
+                            name=field["name"],
+                            value=field["value"],
+                            inline=field["inline"],
+                        )
+                if url:
+                    embed.url = url
+                if timestamp:
+                    embed.set_timestamp()
+                if author:
+                    embed.author = author
+                webhook.add_embed(embed)
+            if proxies:
+                webhook.proxies = proxies
+            response = webhook.execute()
+        else:
+            return
+    except Exception as e:
         send_error_message(e, discord=False)
 
 
@@ -576,36 +682,115 @@ def write_zip_comment(zip_file, comment):
 
 
 # Prints our results for the user
-def print_result(result):
-    if hasattr(result, "book"):
-        if result.book:
-            print(
-                "\n--------------------------------[Book Information]------------------------------"
-            )
-            # get list of all attributes from book Class
-            attributes = [
-                attr
-                for attr in dir(result.book)
-                if not callable(getattr(result.book, attr))
-            ]
-            # remove system attributes
-            attributes = [attr for attr in attributes if not attr.startswith("__")]
-            # print all attributes
-            for attr in attributes:
-                # if the value isn't empty
-                if getattr(result.book, attr):
-                    # titlecase the attribute
-                    capitalized = titlecase(attr)
-                    print(f"\t{capitalized}: {getattr(result.book, attr)}")
-            print(
-                "--------------------------------------------------------------------------------\n"
-            )
-    if (
-        print_extracted_texts_with_result
-        and hasattr(result, "extracted_texts")
-        and result.extracted_texts
-    ):
-        print_extracted_texts(result.extracted_texts)
+def print_book_result(result, discord=False):
+    try:
+        discord_message_fields = []
+        if hasattr(result, "book"):
+            if result.book:
+                print(
+                    "\n--------------------------------[Book Information]------------------------------"
+                )
+                # get list of all attributes from book Class
+                attributes = [
+                    attr
+                    for attr in dir(result.book)
+                    if not callable(getattr(result.book, attr))
+                ]
+                # remove system attributes
+                attributes = [attr for attr in attributes if not attr.startswith("__")]
+                # print all attributes
+                for attr in attributes:
+                    # if the value isn't empty
+                    if getattr(result.book, attr):
+                        # titlecase the attribute
+                        capitalized = titlecase(remove_underscore_from_name(attr))
+                        value = getattr(result.book, attr)
+                        if capitalized.lower() == "provider":
+                            value = result.book.provider.name
+                        message = convert_to_ascii(f"\t{capitalized}: {value}")
+                        print("\t" + message)
+                        discord_field_value = ""
+                        if isinstance(value, list):
+                            discord_field_value = ", ".join(value)
+                        else:
+                            discord_field_value = str(value)
+                        discord_message_fields.append(
+                            {
+                                "name": capitalized,
+                                "value": discord_field_value,
+                                "inline": False,
+                            }
+                        )
+                if discord_message_fields:
+                    image_to_use = None
+                    if result.book.image_links:
+                        if len(result.book.image_links) > 1:
+                            image_to_use = result.book.image_links[1]
+                        elif len(result.book.image_links) == 1:
+                            image_to_use = result.book.image_links[0]
+                    else:
+                        image_to_use = "NONE"
+                    send_discord_message(
+                        None,
+                        str(result.book.series) + ": " + str(result.book.title),
+                        color=8421504,
+                        fields=discord_message_fields,
+                        url=result.book.api_link,
+                        author={
+                            "name": result.book.provider.name,
+                            "url": result.book.api_link,
+                            "icon_url": result.book.provider.icon_url,
+                        },
+                        image_url=image_to_use,
+                        thumbnail_url=image_to_use,
+                    )
+                score_fields = []
+                if (
+                    hasattr(result, "ssim_score")
+                    and hasattr(result, "mse_score")
+                    and hasattr(result, "psnr_score")
+                    and result.ssim_score
+                    and result.mse_score
+                    and result.psnr_score
+                ):
+                    print("\tSSIM Score: " + str(result.ssim_score))
+                    print("\tMSE Score: " + str(result.mse_score))
+                    print("\tPSNR Score: " + str(result.psnr_score))
+                    score_fields = [
+                        {
+                            "name": "SSIM",
+                            "value": str(result.ssim_score),
+                            "inline": False,
+                        },
+                        {
+                            "name": "MSE",
+                            "value": str(result.mse_score),
+                            "inline": False,
+                        },
+                        {
+                            "name": "PSNR",
+                            "value": str(result.psnr_score),
+                            "inline": False,
+                        },
+                    ]
+                if score_fields:
+                    send_discord_message(
+                        None,
+                        "Image Similarity Scores:",
+                        color=8421504,
+                        fields=score_fields,
+                    )
+                print(
+                    "--------------------------------------------------------------------------------\n"
+                )
+        if (
+            print_extracted_texts_with_result
+            and hasattr(result, "extracted_texts")
+            and result.extracted_texts
+        ):
+            print_extracted_texts(result.extracted_texts)
+    except Exception as e:
+        send_error_message(e)
 
 
 # Removes the formatting from the passed string
@@ -942,19 +1127,24 @@ def clean_and_sort(root, files=None, dirs=None, sort=False):
         remove_ignored_folders(dirs)
 
 
+# Checks if the passed string contains volume keywords
 def contains_volume_keywords(file):
     return re.search(
         r"((\s(\s-\s|)(Part|)+(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)(\.|)([-_. ]|)([0-9]+)\b)|\s(\s-\s|)(Part|)(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)([0-9]+)\s|\s(\s-\s|)(Part|)(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)(LN|Light Novels?|Novels?|Books?|Volumes?|Vols?|V|第|Discs?)([0-9]+)\s)",
-        file,
+        remove_underscore_from_name(file),
         re.IGNORECASE,
     )
 
 
 # check if volume file name is a chapter
 def contains_chapter_keywords(file_name):
+    file_name_clean = re.sub(r"c1fi7", "", file_name, re.IGNORECASE)
+    file_name_clean = remove_dual_space(
+        re.sub(r"(_)", " ", file_name_clean).strip()
+    ).strip()
     return re.search(
-        r"\b((ch|c|d|chapter|chap)([-_. ](\s|)|)|)(\d)+(([.](\d)+)?)(([-_. ](\s|)|)|)(\d)+(([.](\d)+)?)(\s|(.cbz)?(.epub)?)",
-        file_name,
+        r"(((ch|c|d|chapter|chap)([-_. ]+)?([0-9]+))|\s+([0-9]+)(\.[0-9]+)?(x\d+((\.\d+)+)?)?(\s+|#\d+|\.cbz))",
+        file_name_clean,
         re.IGNORECASE,
     )
 
@@ -962,7 +1152,9 @@ def contains_chapter_keywords(file_name):
 # Checks for volume keywords and chapter keywords.
 # If neither are present, the volume is assumed to be a one-shot volume.
 def is_one_shot(file_name, root):
-    files = os.listdir(root)
+    files = [x for x in os.listdir(root) if os.path.isfile(os.path.join(root, x))]
+    # files = remove_hidden_files(files)
+    # remove_unaccepted_file_types(files, root)
     clean_and_sort(root, files)
     continue_logic = False
     if len(files) == 1:
@@ -1023,6 +1215,7 @@ def google_api_isbn_lookup(
     original_file_name = file_name
     extension = get_file_extension(original_file_name)
     file_dir_files = []
+    series_id_order_number = ""
     try:
         base_api_link = ""
         text = ""
@@ -1148,13 +1341,20 @@ def google_api_isbn_lookup(
                                     series_id = series_id["seriesId"]
                                     series_id = "series_id:" + series_id
                                 else:
-                                    series_id = "series_id:NONE"
+                                    series_id = ""
                             else:
-                                series_id = "series_id:NONE"
+                                series_id = ""
+                        if "bookDisplayNumber" in series_info:
+                            if series_info["bookDisplayNumber"]:
+                                converted_display_number = set_num_as_float_or_int(
+                                    series_info["bookDisplayNumber"]
+                                )
+                                if converted_display_number:
+                                    series_id_order_number = converted_display_number
                         else:
-                            series_id = "series_id:NONE"
+                            series_id = ""
                     else:
-                        series_id = "series_id:NONE"
+                        series_id = ""
                     if "maturityRating" in volume_info:
                         maturity_rating = volume_info["maturityRating"]
                     else:
@@ -1199,7 +1399,13 @@ def google_api_isbn_lookup(
                             summary = re.sub(r"([A-Z\.\!\?])(\")", r"\1 \2", summary)
                     else:
                         summary = ""
-                    volume_number = remove_everything_but_volume_num([file_name])
+                    volume_number = ""
+                    if not series_id_order_number:
+                        volume_number = remove_everything_but_volume_num(
+                            [remove_bracketed_info_from_name(file_name)]
+                        )
+                    else:
+                        volume_number = series_id_order_number
                     if not volume_number:
                         one_shot = is_one_shot(file_name, root)
                         if one_shot:
@@ -1275,7 +1481,8 @@ def google_api_isbn_lookup(
                                     file_dir_files = [
                                         os.path.join(file_dir, file)
                                         for file in file_dir_files
-                                        if file != original_file_name
+                                        if remove_everything_but_volume_num([file])
+                                        != volume_number
                                         and file.endswith(".epub")
                                     ]
                                 if multi_process_pulling_descriptions:
@@ -1483,7 +1690,9 @@ def google_api_isbn_lookup(
                         average_rating = volume_info["averageRating"]
                         if average_rating:
                             average_rating = set_num_as_float_or_int(average_rating)
-                        if average_rating > 5:
+                        if average_rating > 5 and average_rating <= 10:
+                            average_rating = average_rating / 2
+                        if average_rating > 10:
                             average_rating = ""
                     else:
                         average_rating = ""
@@ -1512,6 +1721,9 @@ def google_api_isbn_lookup(
                         isbn = ""
                     if not api_link:
                         api_link = ""
+                    provider = [x for x in providers if x.name == "google-books"]
+                    if provider:
+                        provider = provider[0]
                     book = Book(
                         isbn,
                         title,
@@ -1537,6 +1749,8 @@ def google_api_isbn_lookup(
                         api_link,
                         maturity_rating,
                         for_sale,
+                        provider,
+                        series_id_order_number=series_id_order_number,
                     )
                     books.append(book)
                 if len(books) > 1:
@@ -1608,9 +1822,15 @@ def write_to_file(
                 send_error_message(e)
 
 
+class InternalZipImage:
+    def __init__(self, name, data):
+        self.name = name
+        self.data = data
+
+
 # parse zip file and return the last three images
 def parse_zip_file(zip_file):
-    paths = []
+    results = []
     with zipfile.ZipFile(zip_file, "r") as zip_ref:
         images = []
         list = zip_ref.namelist()
@@ -1648,13 +1868,13 @@ def parse_zip_file(zip_file):
         for image in images:
             if not os.path.exists(os.path.join(ROOT_DIR, image)):
                 try:
-                    zip_ref.extract(image, ROOT_DIR)
-                except BadZipFile as e:
+                    # read and append the data to results
+                    results.append(InternalZipImage(image, zip_ref.read(image)))
+                except Exception as e:
                     send_error_message(e)
                     write_to_file("bad_zip_file.txt", zip_file)
                     return None
-            paths.append(os.path.join(ROOT_DIR, image))
-    return paths
+    return results
 
 
 def remove_leftover_images(images):
@@ -1668,14 +1888,15 @@ def remove_leftover_images(images):
 # extract text from image using tesseract
 def extract_text_from_image(image):
     try:
-        img = cv2.imread(image)
-        img = cv2.resize(img, None, fx=0.5, fy=0.5)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        new_image = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 85, 11
-        )
-        text = pytesseract.image_to_string(new_image, config="--psm 3")
-        text = pytesseract.image_to_string(image)
+        starting_img = Image.open(io.BytesIO(image))
+        starting_img = np.array(starting_img)
+        # img = cv2.resize(starting_img, None, fx=0.5, fy=0.5)
+        # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # new_image = cv2.adaptiveThreshold(
+        #     gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 85, 11
+        # )
+        # text = pytesseract.image_to_string(new_image, config="--psm 3")
+        text = pytesseract.image_to_string(starting_img)
         return text
     except Exception as e:
         errors.append("image: " + image + " error: " + str(e))
@@ -1707,7 +1928,6 @@ def book_stuff(book, zip_file, texts):
         successful_api_matches.append(zip_file)
         write_to_file("success_api_match.txt", message)
         if result:
-            print_result(result)
             return result
         else:
             return None
@@ -1730,25 +1950,36 @@ def isbn_stuff(extracted_texts, image, zip_file, images, second=False, skip=Fals
     if hasattr(book, "isbn"):
         if book.isbn:
             if not skip:
-                message = (
+                send_change_message(
                     "\tISBN: " + book.isbn + " found in " + os.path.basename(image)
                 )
-                send_change_message(message)
             else:
-                message = "\tISBN: " + book.isbn + " found in file list."
-                send_change_message(message)
-            message = "\tISBN: " + book.isbn + " found in " + os.path.basename(zip_file)
+                send_change_message("\tISBN: " + book.isbn + " found in file list.")
             successful_isbn_retrievals.append(zip_file)
-            write_to_file("success_isbn_retrievals.txt", message)
+            write_to_file(
+                "success_isbn_retrievals.txt",
+                "\tISBN: " + book.isbn + " found in " + os.path.basename(zip_file),
+            )
             return book
     elif not skip:
-        message = "\tNo ISBN found in " + os.path.basename(image)
-        print(message)
+        print("\tNo ISBN found in " + os.path.basename(image))
         if image == images[-1] and second:
-            message = "\tNo ISBN found in File: " + os.path.basename(zip_file)
             unsuccessful_isbn_retrievals.append(zip_file)
-            write_to_file("no_isbn.txt", message)
+            write_to_file(
+                "no_isbn.txt", "\tNo ISBN found in File: " + os.path.basename(zip_file)
+            )
             return None
+
+
+def proces_images_for_isbn_search(image, zip_file):
+    result = None
+    if image:
+        extracted_texts = extract_text_from_image(image)
+        if extracted_texts:
+            isbn = isbn_stuff(extracted_texts, image, zip_file, [image])
+            if isbn:
+                result = book_stuff(isbn, zip_file, extracted_texts)
+    return result
 
 
 def zip_file_stuff(zip_file, second_attempt=False):
@@ -1771,34 +2002,14 @@ def zip_file_stuff(zip_file, second_attempt=False):
             write_to_file("no_images.txt", os.path.basename(zip_file))
             return None
         for image in images:
-            if image != "" and image:
-                extracted_texts = extract_text_from_image(image)
+            if image:
+                extracted_texts = extract_text_from_image(image.data)
                 if extracted_texts:
-                    isbn = isbn_stuff(extracted_texts, image, zip_file, images)
+                    isbn = isbn_stuff(extracted_texts, image.name, zip_file, images)
                     if isbn:
                         result = book_stuff(isbn, zip_file, extracted_texts)
                         if result:
-                            break
-        if not result:
-            print(
-                "\t--------------------------------Attempting second try with alternative OCR method--------------------------------"
-            )
-            for image in images:
-                if image != "" and image:
-                    extracted_texts_two = extract_texts_from_image(image)
-                    if extracted_texts_two:
-                        isbn = isbn_stuff(
-                            extracted_texts_two, image, zip_file, images, second=True
-                        )
-                        if isbn:
-                            result = book_stuff(isbn, zip_file, extracted_texts_two)
-                            if result:
-                                break
-        remove_leftover_images(images)
-        if result and result != "no_api_match":
-            return result
-        else:
-            return None
+                            return result
     elif extension == "epub":
         with zipfile.ZipFile(zip_file, "r") as zip_ref:
             list = zip_ref.namelist()
@@ -1832,7 +2043,7 @@ def zip_file_stuff(zip_file, second_attempt=False):
                         if isbn:
                             result = book_stuff(isbn, zip_file, text)
                             if result:
-                                break
+                                return result
         if result:
             return result
         else:
@@ -2093,6 +2304,7 @@ class Data:
         maturity_rating,
         genres,
         tags,
+        zip_comment,
     ):
         self.title = title
         self.title_sort = title_sort
@@ -2110,6 +2322,7 @@ class Data:
         self.maturity_rating = maturity_rating
         self.genres = genres
         self.tags = tags
+        self.zip_comment = zip_comment
 
 
 def get_metadata_from_epub_via_calibre(epub_path):
@@ -2133,6 +2346,7 @@ def get_metadata_from_epub_via_calibre(epub_path):
     series_id = ""
     api_link = ""
     maturity_rating = ""
+    zip_comment = get_zip_comment(epub_path)
     genres = []
     tags = []
     for line in data:
@@ -2199,10 +2413,6 @@ def get_metadata_from_epub_via_calibre(epub_path):
             average_rating = re.sub(r"((Rating)\s+:)", "", line).strip()
             average_rating = set_num_as_float_or_int(average_rating)
             continue
-        if re.search(r"((Rating)\s+:.*)", line, re.IGNORECASE):
-            average_rating = re.sub(r"((Rating)\s+:)", "", line).strip()
-            average_rating = set_num_as_float_or_int(average_rating)
-            continue
         # Calibre calls the genres tags
         if re.search(r"((Tags)\s+:.*)", line, re.IGNORECASE):
             genres = re.sub(r"((Tags)\s+:)", "", line).strip()
@@ -2226,6 +2436,7 @@ def get_metadata_from_epub_via_calibre(epub_path):
         maturity_rating,
         genres,
         [],
+        zip_comment,
     )
 
 
@@ -2240,9 +2451,9 @@ def clean_below_similarity_score(
         if volume_one_setences_search:
             volume_one_setences = volume_one_setences_search
         else:
-            print("No sentences found in: " + volume_one_summary)
+            print("\tNo sentences found in: " + volume_one_summary)
     else:
-        print("No volume one summary passed in.")
+        print("\tNo volume one summary passed in.")
     clean_base = remove_punctuation(basename).strip()
     bases.append(clean_base)
     if translate_titles and not clean_base.isdigit() and not require_summary_match:
@@ -2250,7 +2461,7 @@ def clean_below_similarity_score(
             clean_base_jp = ts.google(clean_base, to_language="ja")
             bases.append(clean_base_jp)
         except:
-            print("Failed to translate: " + clean_base)
+            print("\tFailed to translate: " + clean_base)
     # loop through arary_list, and put any item that has item.title.english at the front of the list
     if len(array_list) > 1:
         for item in array_list[:]:
@@ -2262,14 +2473,14 @@ def clean_below_similarity_score(
                         array_list.insert(0, item)
     for item in array_list:
         sentences = []
-        if item.description:
+        if hasattr(item, "description") and item.description:
             sentences_search = sent_tokenize(item.description.strip())
             if sentences_search:
                 sentences = sentences_search
             else:
-                print("No sentences found in: " + item.description)
+                print("\tNo sentences found in: " + item.description)
         else:
-            print("No description found to split sentences from.")
+            print("\tNo description found to split sentences from.")
         comparisions = []
         # remove any item in volume_one_sentences and sentences where length is less than 3
         if volume_one_setences and sentences:
@@ -2977,7 +3188,7 @@ def compare_metadata(book, epub_path, files):
                         "ISBN",
                         "--isbn",
                     )
-            if book.isbn and extension == "cbz":
+            if book.isbn:
                 zip_comments_to_be_written.append("isbn:" + str(book.isbn))
             if extension == "cbz":
                 author_upgrade_result = check_for_author_upgrade(
@@ -3165,30 +3376,34 @@ def compare_metadata(book, epub_path, files):
                 else:
                     cbz_changes.append("issue=" + issue_string)
                 data_comparison.append(data.issue)
-            if extension == "epub" and data.average_rating != book.average_rating:
-                update_metadata(
-                    "ebook-meta",
-                    epub_path,
-                    data.average_rating,
-                    book.average_rating * 2,
-                    "Rating",
-                    "-r",
-                    half=True,
-                )
-            if data.series_id != book.series_id:
+            if data.average_rating != book.average_rating and book.average_rating:
                 if extension == "epub":
                     update_metadata(
                         "ebook-meta",
                         epub_path,
-                        data.series_id,
-                        book.series_id,
-                        "Series ID",
-                        "--identifier",
+                        data.average_rating,
+                        book.average_rating * 2,
+                        "Rating",
+                        "-r",
+                        half=True,
                     )
-            if book.series_id and extension == "cbz":
+                elif extension == "cbz":
+                    cbz_changes.append("critical_rating=" + str(book.average_rating))
+                    data_comparison.append(data.average_rating)
+            # if data.series_id != book.series_id:
+            #     if extension == "epub":
+            #         update_metadata(
+            #             "ebook-meta",
+            #             epub_path,
+            #             data.series_id,
+            #             book.series_id,
+            #             "Series ID",
+            #             "--identifier",
+            #         )
+            if book.series_id:
                 zip_comments_to_be_written.append(book.series_id)
             if anilist_metadata:
-                if anilist_metadata.id and extension == "cbz":
+                if anilist_metadata.id:
                     zip_comments_to_be_written.append(
                         "anilist_id:" + str(anilist_metadata.id)
                     )
@@ -3211,7 +3426,7 @@ def compare_metadata(book, epub_path, files):
                 if data.tags != book.tags:
                     if extension == "epub":
                         print(
-                            "\tNo standardized tags tag for epub currently, skipping :'("
+                            "\tNo standardized tags tag for epub currently, skipping :'(\n"
                         )
                     else:
                         print(
@@ -3322,12 +3537,20 @@ def update_metadata(
                         "\t\tFrom: " + str(data_num) + " \n\t\tTo:   " + str(book_num)
                     )
                 else:
-                    print(
-                        "\t\tFrom: "
-                        + str(data_num)
-                        + " \n\t\tTo:   "
-                        + str(book_num / 2)
-                    )
+                    if book_num:
+                        print(
+                            "\t\tFrom: "
+                            + str(data_num)
+                            + " \n\t\tTo:   "
+                            + str(book_num / 2)
+                        )
+                    else:
+                        print(
+                            "\t\tFrom: "
+                            + str(data_num)
+                            + " \n\t\tTo:   "
+                            + str(book_num)
+                        )
             else:
                 print("\tUpdating " + item + " to " + str(book_num))
             if item.lower() == "rating" or item.lower() == "index number":
@@ -3373,8 +3596,12 @@ def update_metadata(
             or manual_metadata_write_approval
             and epub_path.endswith(".cbz")
         ):
-            if input("\tApprove? (y/n): ") == "y":
+            user_input = input("\tApprove? (y/n): ")
+            if user_input == "y":
                 execution_result = execute_command(command)
+            elif user_input == "n":
+                print("\tUpdated declined.")
+                return
         else:
             execution_result = execute_command(command)
         if (
@@ -3628,6 +3855,7 @@ class CBZTags:
         characters,
         manga,
         maturity_rating,
+        average_rating,
         teams,
         genres,
         tags,
@@ -3654,6 +3882,7 @@ class CBZTags:
         self.characters = characters
         self.manga = manga
         self.maturity_rating = maturity_rating
+        self.average_rating = average_rating
         self.teams = teams
         self.genres = genres
         self.tags = tags
@@ -3751,13 +3980,14 @@ def parse_comictagger_output(path):
     api_link = ""
     manga = ""
     maturity_rating = ""
+    average_rating = ""
     previous_element = ""
     teams = ""
     genres = []
     tags = []
     for line in output:
         if re.search(
-            r"((series|issue|title|publisher|year|month|day|volume|language|manga|maturity_rating|web_link|scan_info|characters|comments|notes?|credit|teams|genre|tags):(\s+)?.*)",
+            r"((series|issue|title|publisher|year|month|day|volume|language|manga|maturity_rating|critical_rating|web_link|scan_info|characters|comments|notes?|credit|teams|genre|tags):(\s+)?.*)",
             line,
             flags=re.IGNORECASE,
         ):
@@ -3832,6 +4062,9 @@ def parse_comictagger_output(path):
             elif key == "maturity_rating":
                 maturity_rating = value
                 previous_element = "maturity_rating"
+            elif key == "critical_rating":
+                average_rating = value
+                previous_element = "critical_rating"
             elif key == "teams":
                 teams = value
                 previous_element = "teams"
@@ -3940,6 +4173,7 @@ def parse_comictagger_output(path):
         characters,
         manga,
         maturity_rating,
+        average_rating,
         teams,
         genres,
         tags,
@@ -4864,8 +5098,10 @@ def get_kobo_books_meta(
                         # get contents of first span
                         rating = spans[0].text.strip()
                         rating = float(rating)
-                        if rating == 0:
+                        if rating == 0 or rating > 10:
                             rating = ""
+                        if rating > 5 and rating <= 10:
+                            rating = rating / 2
                 else:
                     print("\t\tNo average rating found")
             else:
@@ -4959,6 +5195,9 @@ def get_kobo_books_meta(
             return None
         if isbn == 0:
             isbn = ""
+        provider = [x for x in providers if x.name == "kobo"]
+        if provider:
+            provider = provider[0]
         # return book object
         book = Book(
             isbn,
@@ -4979,12 +5218,13 @@ def get_kobo_books_meta(
             website_url,
             [image_link],
             part,
-            "series_id:NONE",
+            "",
             rating,
             True,
             website_url,
             "",
             "FOR_SALE",
+            provider,
         )
         return book
     except Exception as e:
@@ -5454,6 +5694,9 @@ def get_bookwalker_books_meta(link):
     except Exception as e:
         print("Error: " + str(e))
         return None
+    provider = [x for x in providers if x.name == "bookwalker"]
+    if provider:
+        provider = provider[0]
     book = Book(
         "",
         title,
@@ -5473,12 +5716,13 @@ def get_bookwalker_books_meta(link):
         series_link,
         [image_link],
         part,
-        "series_id:NONE",
+        "",
         rating,
         True,
         series_link,
         maturity_rating,
         "FOR_SALE",
+        provider,
     )
     return book
 
@@ -5764,6 +6008,9 @@ def get_barnes_and_noble_books_meta(link, skip=False, data=None):
     except Exception as e:
         send_error_message(e)
         return None
+    provider = [x for x in providers if x.name == "barnes_and_noble"]
+    if provider:
+        provider = provider[0]
     book = Book(
         isbn,
         title,
@@ -5783,12 +6030,13 @@ def get_barnes_and_noble_books_meta(link, skip=False, data=None):
         link,
         [image_link],
         part,
-        "series_id:NONE",
+        "",
         "",
         is_ebook,
         link,
         "",
         for_sale,
+        provider,
     )
     return book
 
@@ -5878,7 +6126,7 @@ def search_comic_vine(query, api_key, limit=None):
                     average_rating = ""
                     is_ebook = True
                     maturity_rating = ""
-                    series_id = "series_id:NONE"
+                    series_id = ""
                     store_availability_status = "FOR_SALE"
                     genres = []
                     tags = []
@@ -6030,6 +6278,9 @@ def search_comic_vine(query, api_key, limit=None):
                             title = volume_keyword + str(volume_number)
                     if not language and summary:
                         language = detect_language(summary)
+                    provider = [x for x in providers if x.name == "comic_vine"]
+                    if provider:
+                        provider = provider[0]
                     book = Book(
                         isbn,
                         title,
@@ -6057,6 +6308,7 @@ def search_comic_vine(query, api_key, limit=None):
                         store_availability_status,
                         genres,
                         tags,
+                        provider,
                     )
                     books.append(book)
                     if limit and len(books) == limit:
@@ -6176,7 +6428,7 @@ def find_internal_cover(file, path, extension, root, extensionless_name):
                         epub_cover_path
                         and os.path.basename(image_file) == epub_cover_path
                         or re.search(
-                            r"(\b(Cover([0-9]+|)|CoverDesign)\b)",
+                            r"(\b(Cover([0-9]+|)|CoverDesign|page([-_. ]+)?cover)\b)",
                             image_file,
                             re.IGNORECASE,
                         )
@@ -6193,13 +6445,15 @@ def find_internal_cover(file, path, extension, root, extensionless_name):
                             re.IGNORECASE,
                         )
                     ):
-                        print("\tInternal Cover: " + image_file)
+                        print("\n\tInternal Cover: " + image_file)
                         with zip_ref.open(image_file) as image_file_ref:
                             data = image_file_ref.read()
                             # close the file
                             image_file_ref.close()
                             return data
-                    print("\tNo cover found, defaulting to first image: " + zip_list[0])
+                    print(
+                        "\n\tNo cover found, defaulting to first image: " + zip_list[0]
+                    )
                     print("\tInternal Cover: " + image_file)
                     default_cover_path = zip_list[0]
                     with zip_ref.open(default_cover_path) as default_cover_ref:
@@ -6223,7 +6477,7 @@ def search_provider(
     cover = find_cover(file_path)
     cover_path = ""
     internal_cover_data = None
-    if use_internal_cover:
+    if use_internal_cover or not cover:
         internal_cover_data = find_internal_cover(
             file, file_path, extension, root, extenionless_name
         )
@@ -6246,6 +6500,9 @@ def search_provider(
             print("\n\tUsing internal cover.")
     series = get_series_name_from_file_name(file)
     volume_number = remove_everything_but_volume_num([file])
+    if not volume_number and is_one_shot(file, root):
+        volume_number = 1
+        series = remove_bracketed_info_from_name(series)
     if volume_number:
         if not isinstance(volume_number, list):
             volume_number = set_num_as_float_or_int(volume_number)
@@ -6259,10 +6516,19 @@ def search_provider(
     part = get_volume_part(file)
     part = set_num_as_float_or_int(part)
     directory = os.path.dirname(file_path)
-    send_change_message(
-        "\nSearching Provider: " + titlecase(remove_underscore_from_name(provider.name))
+    send_discord_message(
+        None,
+        "Searching Provider:",
+        color=8421504,
+        fields=[
+            {
+                "name": "Name",
+                "value": "```" + provider.name + "```",
+                "inline": False,
+            },
+        ],
     )
-    if provider.name == "google":
+    if provider.name == "google-books":
         print("\tSearching folder files for a common series_id...")
         series_files = [
             f
@@ -6336,8 +6602,9 @@ def search_provider(
             print("\tNo other files found in directory for series_id search.")
     if (cover or internal_cover_data) and not skip_image_comparison:
         print("\n----------------------------------------------------------------")
-        print("Using string search and image comparison.")
+        print("Using string search + image comparison matching.")
         print("----------------------------------------------------------------")
+        series_id_w_matching_vol_to_ord_num = []
         cleaned_results = []
         if series and volume_number:
             part = get_volume_part(file)
@@ -6366,7 +6633,7 @@ def search_provider(
             print("Required Image SSIM Score: " + str(required_image_ssim_score))
             print("Required Image MSE Score: " + str(required_image_mse_score))
             first_word_in_series = remove_punctuation(series.split(" ")[0])
-            if provider.name == "google":
+            if provider.name == "google-books":
                 if series_info and (
                     not session_result or not session_result.api_results
                 ):
@@ -6375,7 +6642,13 @@ def search_provider(
                     num = 1
                     print("Total series results: " + str(len(series_info)))
                     for id in series_info:
-                        print("\t[" + str(num) + "] " + id)
+                        print(
+                            "\t["
+                            + str(num)
+                            + "] "
+                            + "https://www.googleapis.com/books/v1/volumes/"
+                            + id
+                        )
                         num += 1
                         series_search = google_api_isbn_lookup(
                             0,
@@ -6410,11 +6683,68 @@ def search_provider(
                                 series_ids_cache.append(session_result)
                             for result in clean_series_search_results:
                                 cleaned_results.append(result)
+                                if (
+                                    (result.series_id_order_number and volume_number)
+                                    and (result.series_id_order_number == volume_number)
+                                    and result
+                                    not in series_id_w_matching_vol_to_ord_num
+                                ):
+                                    series_id_w_matching_vol_to_ord_num.append(result)
                 elif session_result and session_result.api_results:
                     for result in session_result.api_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            if provider.name == "google":
+                        if (
+                            (result.series_id_order_number and volume_number)
+                            and (result.series_id_order_number == volume_number)
+                            and result not in series_id_w_matching_vol_to_ord_num
+                        ):
+                            series_id_w_matching_vol_to_ord_num.append(result)
+            if series_id_w_matching_vol_to_ord_num:
+                series_id_matching_vol_results = []
+                for item in series_id_w_matching_vol_to_ord_num:
+                    # get the volume_id from the end of the item.api_link
+                    if item.api_link and re.search(r"(\/volumes\/)", item.api_link):
+                        volume_id = os.path.basename(item.api_link)
+                        if volume_id:
+                            series_id_matching_item_search = google_api_isbn_lookup(
+                                0,
+                                epub_path,
+                                skip_title_check=True,
+                                volume_id=volume_id,
+                                max_results_num=40,
+                            )
+                            if len(series_id_w_matching_vol_to_ord_num) > 1:
+                                time.sleep(web_scrape_sleep_time)
+                            if series_id_matching_item_search:
+                                series_id_matching_vol_results.append(
+                                    series_id_matching_item_search
+                                )
+                if series_id_matching_vol_results:
+                    clean_series_id_matching_vol_results = clean_api_results(
+                        series_id_matching_vol_results,
+                        volume_number,
+                        first_word_in_series,
+                        multi_volume,
+                        series,
+                        extension,
+                        skip_vol_nums_equal=False,
+                        skip_contains_first_word=False,
+                        skip_omnibus_check=True,
+                        skip_manga_keyword_check=True,
+                        skip_series_similarity=False,
+                        skip_isebook_check=False,
+                        skip_categories_check=True,
+                        skip_summary_check=False,
+                    )
+                    if clean_series_id_matching_vol_results:
+                        for result in clean_series_id_matching_vol_results:
+                            if result not in cleaned_results:
+                                cleaned_results.append(result)
+                    series_id_w_matching_vol_to_ord_num = (
+                        clean_series_id_matching_vol_results
+                    )
+            if provider.name == "google-books":
                 # check the zip_comment for an isbn number
                 if zip_comment:
                     print("\nChecking zip comment for isbn obtained elsewhere...")
@@ -6439,7 +6769,7 @@ def search_provider(
                         for result in clean_google_result:
                             if result not in cleaned_results:
                                 cleaned_results.append(result)
-            if provider.name == "google":
+            if provider.name == "google-books":
                 r = google_api_isbn_lookup(
                     0,
                     epub_path,
@@ -6463,7 +6793,7 @@ def search_provider(
                     for result in clean_r_results:
                         if result not in cleaned_results:
                             cleaned_results.append(result)
-            # if provider.name == "google":
+            # if provider.name == "google-books":
             #     print("\nAdditional volume quoted search: " + search)
             #     b = google_api_isbn_lookup(
             #         0,
@@ -6489,7 +6819,7 @@ def search_provider(
             #         for result in clean_b_results:
             #             if result not in cleaned_results:
             #                 cleaned_results.append(result)
-            if provider.name == "google" and not limit_google_search:
+            if provider.name == "google-books" and not limit_google_search:
                 print("\nAdditional Search without volume Keyword: " + search_three)
                 no_volume_keyword_results = google_api_isbn_lookup(
                     0,
@@ -6729,7 +7059,8 @@ def search_provider(
                         print("\t\tSeries: " + result.series)
                         print("\t\tVolume: " + str(result.volume))
                         print("\t\tISBN: " + str(result.isbn))
-                        print("\t\tLink: " + result.preview_link[0])
+                        print("\t\tAPI Link: " + result.api_link)
+                        print("\t\tLink: " + result.preview_link)
                         if result.image_links:
                             print(
                                 "\t\tTotal Image Links: " + str(len(result.image_links))
@@ -6771,10 +7102,34 @@ def search_provider(
                     reverse=True,
                 )
                 best_result = results_with_image_score[0]
+                passed = False
                 if (
                     best_result.ssim_score >= required_image_ssim_score
                     or best_result.mse_score <= required_image_mse_score
                 ):
+                    passed = True
+                elif (
+                    series_id_w_matching_vol_to_ord_num
+                    and len(series_id_w_matching_vol_to_ord_num) == 1
+                ):
+                    passed = True
+                    best_result = Image_Result(
+                        series_id_w_matching_vol_to_ord_num[0],
+                        0,
+                        0,
+                        0,
+                        series_id_w_matching_vol_to_ord_num[0].image_links[1],
+                    )
+                else:
+                    series_id_w_matching_vol_to_ord_num = []
+                if passed:
+                    if series_id_w_matching_vol_to_ord_num and not (
+                        best_result.ssim_score >= required_image_ssim_score
+                        or best_result.mse_score <= required_image_mse_score
+                    ):
+                        send_discord_message(
+                            "match found through series_id_order_number match with one result."
+                        )
                     best_result.book.series = series
                     best_result.book.volume_number = volume_number
                     best_result.book.number = volume_number
@@ -6828,39 +7183,6 @@ def search_provider(
                         else:
                             volume_keyword = "Volume "
                             best_result.book.title = volume_keyword + str(volume_number)
-                    print("\t\tSeries: " + best_result.book.series)
-                    if best_result.book.title:
-                        send_discord_message("Title: " + best_result.book.title)
-                    if best_result.book.publisher:
-                        send_discord_message("Publisher: " + best_result.book.publisher)
-                    if best_result.book.published_date:
-                        send_discord_message(
-                            "Release Date: " + best_result.book.published_date
-                        )
-                    if best_result.book.summary:
-                        send_discord_message("Summary: " + best_result.book.summary)
-                    if best_result.book.preview_link:
-                        send_change_message(
-                            "\t\tLink: " + best_result.book.preview_link[0]
-                        )
-                    if best_result.image_link:
-                        send_change_message("\t\tImage Link: " + best_result.image_link)
-                    if best_result.book.api_link:
-                        send_change_message(
-                            "\t\tAPI Link: " + best_result.book.api_link
-                        )
-                    if best_result.book.volume_number:
-                        print(
-                            "\t\tVolume Number: " + str(best_result.book.volume_number)
-                        )
-                    if best_result.ssim_score:
-                        send_change_message("\t\tSSIM: " + str(best_result.ssim_score))
-                    if best_result.psnr_score:
-                        print("\t\tPSNR: " + str(best_result.psnr_score))
-                    if best_result.mse_score:
-                        send_change_message("\t\tMSE: " + str(best_result.mse_score))
-                    if best_result.book.part:
-                        print("\t\tPart: " + str(best_result.book.part))
                     write_to_file(
                         "items_found_through_image_comparision_search.txt",
                         epub_path,
@@ -6890,7 +7212,7 @@ def search_provider(
                     if best_result.book.isbn:
                         print("\tISBN: " + str(best_result.book.isbn))
                     if best_result.book.preview_link:
-                        print("\tLink: " + best_result.book.preview_link[0])
+                        print("\tLink: " + best_result.book.preview_link)
                     write_to_file(
                         "items_not_found_through_image_comparision_search.txt",
                         epub_path,
@@ -7006,8 +7328,11 @@ def search_provider(
 # open ComicInfo.xml from the passed zip file, and return the xml contents as a string
 def get_comic_info_xml(zip_file):
     with zipfile.ZipFile(zip_file, "r") as z:
-        with z.open("ComicInfo.xml", "r") as f:
-            return f.read().decode("utf-8")
+        list = z.namelist()
+        for file in list:
+            if file == "ComicInfo.xml" and not re.search(r"__MACOSX", file):
+                return z.read(file).decode("utf-8")
+    return None
 
 
 # check if zip file contains ComicInfo.xml
@@ -7079,6 +7404,8 @@ def process_file(file_name, files):
     try:
         multi_volume = check_for_multi_volume_file(file_name)
         volume_number = remove_everything_but_volume_num([file_name])
+        if not volume_number and is_one_shot(file_name, root):
+            volume_number = 1
         if not isinstance(volume_number, list):
             if skip_non_volume_ones and volume_number != 1:
                 print("\tSkip non-volume one files enabled, skipping: " + file_name)
@@ -7100,6 +7427,7 @@ def process_file(file_name, files):
                 return None
         if extension in accepted_file_types:
             result = ""
+            cleaned_result = ""
             if extension == "cbz":
                 contains_comic_info = check_if_zip_file_contains_comic_info_xml(
                     file_path
@@ -7116,10 +7444,29 @@ def process_file(file_name, files):
                             ):
                                 print("\tnot tagged by comictagger, skipping...")
                                 return None
+                        else:
+                            send_error_message(
+                                "Detected comic_info, but no contents found with: "
+                                + file_name
+                            )
+                            write_to_file(
+                                "found_comic_info_but_no_contents.txt",
+                                file_path,
+                                without_date=True,
+                                check_for_dup=True,
+                            )
                     if skip_google_metadata and comic_info_contents:
                         if re.search(r"googleapis", comic_info_contents, re.IGNORECASE):
                             print("\tcontains google metadata, skipping...")
                             return None
+                        else:
+                            comic_info_contents_xml = parse_comicinfo_xml(
+                                comic_info_contents
+                            )
+                            if comic_info_contents_xml:
+                                # print web tag
+                                if comic_info_contents_xml["Web"]:
+                                    print("\tWeb: " + comic_info_contents_xml["Web"])
                 elif (
                     not contains_comic_info
                     and skip_all_non_comic_tagger_tagged
@@ -7141,12 +7488,24 @@ def process_file(file_name, files):
                     if contains_title:
                         print("\t" + " already contains metadata, skipping...")
                         return None
-            send_discord_message(
-                "\n--------------------------------------------------------------------------------\n"
-                + "File: "
-                + os.path.basename(file)
-                + "\n--------------------------------------------------------------------------------"
-            )
+            if file and file_path:
+                send_discord_message(
+                    None,
+                    "File:",
+                    color=8421504,
+                    fields=[
+                        {
+                            "name": "Name",
+                            "value": "```" + os.path.basename(file) + "```",
+                            "inline": False,
+                        },
+                        {
+                            "name": "Location",
+                            "value": "```" + os.path.dirname(file_path) + "```",
+                            "inline": False,
+                        },
+                    ],
+                )
             for provider in providers:
                 if provider.enabled:
                     result = search_provider(
@@ -7161,7 +7520,7 @@ def process_file(file_name, files):
                     if result:
                         break
                 else:
-                    print("\t" + provider.name + " is disabled, skipping...")
+                    print("\n\t" + provider.name + " is disabled, skipping...\n")
             if not result and (not only_image_comparision or extension == "cbz"):
                 print(
                     "----------------------------------------------------------------"
@@ -7172,114 +7531,95 @@ def process_file(file_name, files):
                 )
                 result = zip_file_stuff(file_path)
             if result and hasattr(result, "book"):
-                # get today's day from today's date
-                todays_day = datetime.now().strftime("%d")
-                if todays_day:
-                    todays_day = int(todays_day)
-                else:
-                    todays_day = ""
-                if result.book.published_date and re.search(
-                    r"-", result.book.published_date
-                ):
-                    if re.search(
-                        r"((\d\d\d\d)-(\d+)-(\d+))", result.book.published_date
-                    ):
-                        day = result.book.published_date.split("-")[2]
+                if result.book.number == volume_number:
+                    # get today's day from today's date
+                    todays_day = datetime.now().strftime("%d")
+                    if todays_day:
+                        todays_day = int(todays_day)
                     else:
-                        day = result.book.published_date.split("-")[1]
-                else:
-                    day = ""
-                if day:
-                    day = int(day)
-                else:
-                    day = ""
-                if (
-                    (
-                        result.book.is_ebook
-                        and result.book.for_sale
-                        and result.book.for_sale == "FOR_SALE"
-                    )
-                    or (
-                        not check_if_date_is_past(
-                            result.book.day, result.book.month, result.book.year
-                        )
-                        and todays_day
-                        and day
-                        and day == todays_day + 1
-                    )
-                    or (
-                        square_enix_bypass
-                        and re.search(r"Square", result.book.publisher, re.IGNORECASE)
-                        and re.search(r"Enix", result.book.publisher, re.IGNORECASE)
-                    )
-                    or (
-                        result.book.day
-                        and result.book.month
-                        and result.book.year
-                        and is_future_date(
-                            int(result.book.day),
-                            int(result.book.month),
-                            int(result.book.year),
-                        )
-                    )
-                ):
-                    if result.book.summary:
-                        # send_discord_message("Title: " + result.book.title)
-                        # send_discord_message("Summary: " + result.book.summary)
-                        # send_discord_message("Link: " + result.book.preview_link[0])
-                        # send_discord_message(
-                        #     "Image Link: " + result.book.image_links[1]
-                        # )
-                        write_metadata = compare_metadata(result.book, file_path, files)
-                        items_found_through_ocr_on_epub.append(file_path)
-                        write_to_file(
-                            "items_found_through_ocr_on_epub.txt",
-                            file_path,
-                        )
-                        return result
-                    elif not result.book.summary and scrape_kobo:
-                        send_error_message(
-                            "api result has no summary, attempting to use an alternative source..."
-                        )
-                        kobo_alt_result = get_kobo_books_meta(
-                            "https://www.kobo.com",
-                            result.book.isbn,
-                            result.book.volume,
-                            result.book.part,
-                            result.book.series,
-                        )
-                        if kobo_alt_result and kobo_alt_result.summary:
-                            send_change_message(
-                                "\tResult found with alternative source: "
-                                + kobo_alt_result.api_link
+                        todays_day = ""
+                    if result.book.published_date and re.search(
+                        r"-", result.book.published_date
+                    ):
+                        if re.search(
+                            r"((\d\d\d\d)-(\d+)-(\d+))", result.book.published_date
+                        ):
+                            day = result.book.published_date.split("-")[2]
+                        else:
+                            day = result.book.published_date.split("-")[1]
+                    else:
+                        day = ""
+                    if day:
+                        day = int(day)
+                    else:
+                        day = ""
+                    if (
+                        (
+                            (
+                                result.book.is_ebook
+                                and result.book.for_sale
+                                and result.book.for_sale == "FOR_SALE"
                             )
-                            send_change_message("\t\tTitle: " + kobo_alt_result.title)
-                            send_change_message(
-                                "\t\tPublisher: " + kobo_alt_result.publisher
+                            or allow_non_is_ebook_results
+                        )
+                        or (
+                            not check_if_date_is_past(
+                                result.book.day, result.book.month, result.book.year
                             )
-                            send_change_message(
-                                "\t\tSummary: " + kobo_alt_result.summary
+                            and todays_day
+                            and day
+                            and day == todays_day + 1
+                        )
+                        or (
+                            square_enix_bypass
+                            and re.search(
+                                r"Square", result.book.publisher, re.IGNORECASE
                             )
-                            send_change_message("\t\tLink: " + kobo_alt_result.api_link)
-                            send_change_message(
-                                "\t\tImage Link: " + kobo_alt_result.image_links[0]
+                            and re.search(r"Enix", result.book.publisher, re.IGNORECASE)
+                        )
+                        or (
+                            result.book.day
+                            and result.book.month
+                            and result.book.year
+                            and is_future_date(
+                                int(result.book.day),
+                                int(result.book.month),
+                                int(result.book.year),
                             )
+                        )
+                    ):
+                        if result.book.summary:
+                            print_book_result(result, discord=True)
                             write_metadata = compare_metadata(
-                                kobo_alt_result, file_path, files
+                                result.book, file_path, files
                             )
                             items_found_through_ocr_on_epub.append(file_path)
                             write_to_file(
                                 "items_found_through_ocr_on_epub.txt",
                                 file_path,
                             )
-                            return kobo_alt_result
+                            return result
                         else:
-                            send_error_message("\tno kobo result, skipping...")
+                            send_error_message("\tempty summary, skipping...")
                     else:
-                        send_error_message("\tempty summary, skipping...")
+                        send_error_message(
+                            "\tFile: "
+                            + file_name
+                            + "\n\t\tis_ebook=False\n\t\tskipping..."
+                        )
                 else:
                     send_error_message(
-                        "\tFile: " + file_name + "\n\t\tis_ebook=False\n\t\tskipping..."
+                        "\tFile: "
+                        + file_name
+                        + "\n\t\tvolume_number mismatch\n\t\tskipping..."
+                        + "\n\t\tresult.book.number: "
+                        + str(result.book.number)
+                    )
+                    write_to_file(
+                        "volume_number_mismatch.txt",
+                        file_path,
+                        without_date=True,
+                        check_for_dup=True,
                     )
     except Exception as e:
         send_error_message(e)
@@ -7348,12 +7688,12 @@ if __name__ == "__main__":
         # find google provider in providers list
         if args.scrape_google.lower() == "true":
             for provider in providers:
-                if provider.name == "google":
+                if provider.name == "google-books":
                     provider.enabled = True
                     break
         elif args.scrape_google.lower() == "false":
             for provider in providers:
-                if provider.name == "google":
+                if provider.name == "google-books":
                     provider.enabled = False
                     break
     if args.scrape_bookwalker:
@@ -7436,7 +7776,7 @@ if __name__ == "__main__":
                     dirs[:] = [
                         d
                         for d in dirs
-                        if re.search(accepted_letters, d[0], re.IGNORECASE)
+                        if re.search(accepted_letters, d[0].capitalize(), re.IGNORECASE)
                     ]
                 if args.file:
                     files = [os.path.basename(args.file)]
@@ -7450,6 +7790,9 @@ if __name__ == "__main__":
                 result = None
                 if files and not stop:
                     if multi_process_files and len(files) > 1:
+                        print(
+                            "\nmulti_process_files is currently broken, please disable"
+                        )
                         with concurrent.futures.ThreadPoolExecutor(
                             max_workers=2
                         ) as executer:
