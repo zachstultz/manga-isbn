@@ -47,10 +47,11 @@ from simyan.sqlite_cache import SQLiteCache
 from simyan.comicvine import Comicvine, ComicvineResource
 from lxml import etree
 
-# Version: 1.01
-
 # RUN THESE INSTALLS FOR THE PROGRAM TO WORK PROPERLY!
 # sudo apt-get update && sudo apt-get install python3-icu && sudo apt-get install libopengl0 && sudo pip3 install comictagger[all] && pip3 install translators && pip3 install simyan && sudo apt-get install calibre && sudo apt-get install wget && sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin && sudo apt-get install tesseract-ocr
+
+# dependent on path!
+# pip3 install /scripts/manga_isbn_ocr_and_lookup/python-anilist-1.0.9/.
 
 # REQUIRES CHROME TO BE INSTALLED!
 # wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && pip3 install webdriver-manager && pip3 install regex && pip3 install bs4 && pip3 install selenium && rm google-chrome-stable_current_amd64.deb
@@ -378,6 +379,7 @@ class Book:
         genres=[],
         tags=[],
         series_id_order_number="",
+        google_volume_id="",
     ):
         self.isbn = isbn
         self.title = title
@@ -407,6 +409,7 @@ class Book:
         self.genres = genres
         self.tags = tags
         self.series_id_order_number = series_id_order_number
+        self.google_volume_id = google_volume_id
 
 
 class Series_Page_Result:
@@ -456,7 +459,7 @@ providers = [
         "barnes_and_noble",
         True,
         4,
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/b/be/Barnes_and_Noble_logo.svg/2560px-Barnes_and_Noble_logo.svg.png",
+        "https://www.freepnglogos.com/uploads/barnes-and-noble-png-logo/dire-wolf-books-barnes-and-noble-png-logo-9.png",
     ),
     Provider(
         "comic_vine",
@@ -707,6 +710,14 @@ def print_book_result(result, discord=False):
                         value = getattr(result.book, attr)
                         if capitalized.lower() == "provider":
                             value = result.book.provider.name
+                        # if length is greater than 1024, truncate it
+                        # discord max field length is 1024
+                        if len(str(value)) > 1024:
+                            value = value[:1021] + "..."
+                        # if length is greater than 256, truncate it
+                        # discord max title length is 256
+                        if len(str(capitalized)) > 256:
+                            capitalized = capitalized[:253] + "..."
                         message = convert_to_ascii(f"\t{capitalized}: {value}")
                         print("\t" + message)
                         discord_field_value = ""
@@ -783,6 +794,83 @@ def print_book_result(result, discord=False):
                 print(
                     "--------------------------------------------------------------------------------\n"
                 )
+        elif result:
+            print(
+                "\n--------------------------------[Book Information]------------------------------"
+            )
+            attributes = [
+                attr for attr in dir(result) if not callable(getattr(result, attr))
+            ]
+            # remove system attributes
+            attributes = [attr for attr in attributes if not attr.startswith("__")]
+            # print all attributes
+            for attr in attributes:
+                # if the value isn't empty
+                if getattr(result, attr):
+                    # titlecase the attribute
+                    capitalized = titlecase(remove_underscore_from_name(str(attr)))
+                    value = str(getattr(result, attr))
+                    # if length is greater than 1024, truncate it
+                    # discord max field length is 1024
+                    if len(str(value)) > 1024:
+                        value = value[:1021] + "..."
+                    # if length is greater than 256, truncate it
+                    # discord max title length is 256
+                    if len(str(capitalized)) > 256:
+                        capitalized = capitalized[:253] + "..."
+                    message = convert_to_ascii(f"\t{capitalized}: {value}")
+                    print("\t" + message)
+                    discord_field_value = ""
+                    if isinstance(value, list):
+                        discord_field_value = ", ".join(value)
+                    else:
+                        discord_field_value = str(value)
+                    discord_message_fields.append(
+                        {
+                            "name": capitalized,
+                            "value": discord_field_value,
+                            "inline": False,
+                        }
+                    )
+            if discord_message_fields:
+                image_to_use = None
+                title_to_use = None
+                if result.cover:
+                    if hasattr(result.cover, "extra_large"):
+                        image_to_use = result.cover.extra_large
+                    elif hasattr(result.cover, "large"):
+                        image_to_use = result.cover.large
+                    elif hasattr(result.cover, "medium"):
+                        image_to_use = result.cover.medium
+                    elif hasattr(result.cover, "small"):
+                        image_to_use = result.cover.small
+                    else:
+                        image_to_use = "NONE"
+                else:
+                    image_to_use = "NONE"
+                if result.title:
+                    if hasattr(result.title, "english"):
+                        title_to_use = result.title.english
+                    elif hasattr(result.title, "romaji"):
+                        title_to_use = result.title.romaji
+                    elif hasattr(result.title, "native"):
+                        title_to_use = result.title.native
+                    else:
+                        title_to_use = "NO TITLE"
+                send_discord_message(
+                    None,
+                    title_to_use + " (" + str(result.id) + ")",
+                    color=8421504,
+                    fields=discord_message_fields,
+                    url=result.url,
+                    author={
+                        "name": "AniList",
+                        "url": result.url,
+                        "icon_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/AniList_logo.svg/512px-AniList_logo.svg.png",
+                    },
+                    image_url=image_to_use,
+                    thumbnail_url=image_to_use,
+                )
         if (
             print_extracted_texts_with_result
             and hasattr(result, "extracted_texts")
@@ -795,6 +883,11 @@ def print_book_result(result, discord=False):
 
 # Removes the formatting from the passed string
 def remove_formatting(text):
+    """
+    It removes all the formatting from the text.
+
+    :param text: the text to be cleaned
+    """
     return re.sub(r"\s+", " ", text, flags=re.IGNORECASE).strip()
 
 
@@ -1318,6 +1411,20 @@ def google_api_isbn_lookup(
                             for_sale = ""
                     else:
                         is_ebook = ""
+                    if "accessInfo" in item:
+                        access_info = item["accessInfo"]
+                        if "epub" in access_info:
+                            epub = item["accessInfo"]["epub"]
+                            if "isAvailable" in epub:
+                                epub_available = epub["isAvailable"]
+                                if epub_available and not is_ebook:
+                                    is_ebook = True
+                        # if "pdf" in access_info:
+                        #     pdf = item["accessInfo"]["pdf"]
+                        #     if "isAvailable" in pdf:
+                        #         pdf_available = pdf["isAvailable"]
+                        #         if pdf_available and not is_ebook:
+                        #             is_ebook = True
                     if text_search or volume_id:
                         isbn = 0
                         if "title" in item["volumeInfo"]:
@@ -1340,6 +1447,8 @@ def google_api_isbn_lookup(
                                 if "seriesId" in series_id:
                                     series_id = series_id["seriesId"]
                                     series_id = "series_id:" + series_id
+                                    if not is_ebook:
+                                        is_ebook = True
                                 else:
                                     series_id = ""
                             else:
@@ -1751,6 +1860,7 @@ def google_api_isbn_lookup(
                         for_sale,
                         provider,
                         series_id_order_number=series_id_order_number,
+                        google_volume_id=id,
                     )
                     books.append(book)
                 if len(books) > 1:
@@ -1895,8 +2005,8 @@ def extract_text_from_image(image):
         # new_image = cv2.adaptiveThreshold(
         #     gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 85, 11
         # )
-        # text = pytesseract.image_to_string(new_image, config="--psm 3")
         text = pytesseract.image_to_string(starting_img)
+        # text_two = pytesseract.image_to_string(new_image, config="--psm 3")
         return text
     except Exception as e:
         errors.append("image: " + image + " error: " + str(e))
@@ -2704,9 +2814,10 @@ def filter_out_non_ids(results):
 
 def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
     end_result = None
+    ani_search_sleep_time = 5
     try:
         client = anilist.Client()
-        send_change_message(
+        print(
             "-----------------------------------------------------\n"
             + "Searching Anilist For: "
             + basename
@@ -2714,6 +2825,24 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
             + str(type_of_dir)
             + "\n-----------------------------------------------------"
         )
+        send_discord_message(
+            None,
+            "Searching Anilist:",
+            color=8421504,
+            fields=[
+                {
+                    "name": "Search:",
+                    "value": "```" + basename + "```",
+                    "inline": False,
+                },
+                {
+                    "name": "Filter Type(s):",
+                    "value": "```" + str(type_of_dir) + "```",
+                    "inline": False,
+                },
+            ],
+        )
+        time.sleep(ani_search_sleep_time)
         search = client.search_manga(basename, limit=10)
         shortened_search = ""
         shortened_basename = ""
@@ -2724,31 +2853,38 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
             send_change_message(
                 "\tShortened Basename: "
                 + shortened_basename
-                + "\n-----------------------------------------------------"
+                + "\n\t--------------------------------------------"
             )
+            time.sleep(ani_search_sleep_time)
             shortened_search = client.search_manga(shortened_basename, limit=10)
-            shortened_search = filter_out_non_ids(shortened_search)
-        shortened_search_results = [client.get_manga(i.id) for i in shortened_search]
-        shortened_search_results = filter_by_country(
-            shortened_search_results, r"(jpn?|japan|japanese)"
-        )
-        shortened_search_results = filter_by_format(
-            shortened_search_results, type_of_dir
-        )
-        shortened_search_results = clean_below_similarity_score(
-            shortened_basename,
-            shortened_search_results,
-            volume_one_summary,
-            require_summary_match=True,
-        )
-        if shortened_search_results and len(shortened_search_results) == 1:
-            search = shortened_search_results
-            send_change_message(
-                "\t\tFound result using shortened basename: "
-                + str(shortened_search_results[0].title)
-            )
-        else:
+            if shortened_search:
+                shortened_search = filter_out_non_ids(shortened_search)
+        if shortened_search:
             shortened_search_results = []
+            for i in shortened_search:
+                time.sleep(ani_search_sleep_time)
+                shortened_search_results.append(client.get_manga(i.id))
+            if shortened_search_results:
+                shortened_search_results = filter_by_country(
+                    shortened_search_results, r"(jpn?|japan|japanese)"
+                )
+                shortened_search_results = filter_by_format(
+                    shortened_search_results, type_of_dir
+                )
+                shortened_search_results = clean_below_similarity_score(
+                    shortened_basename,
+                    shortened_search_results,
+                    volume_one_summary,
+                    require_summary_match=True,
+                )
+            if shortened_search_results and len(shortened_search_results) == 1:
+                search = shortened_search_results
+                send_change_message(
+                    "\t\tFound result using shortened basename: "
+                    + str(shortened_search_results[0].title)
+                )
+            else:
+                shortened_search_results = []
         if search and len(search) > 0:
             matches = []
             id_results = []
@@ -2757,12 +2893,23 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
                 for s in search:
                     if isinstance(s, list):
                         for item in s:
-                            if hasattr(item, "id") and item.id:
-                                id = item.id
-                                result = client.get_manga(id)
-                                id_results.append(result)
-                            if hasattr(item, "title"):
-                                print("\t" + str(item.title))
+                            if item:
+                                if hasattr(item, "id") and item.id:
+                                    id = item.id
+                                    time.sleep(ani_search_sleep_time)
+                                    result = client.get_manga(id)
+                                    if result:
+                                        id_results.append(result)
+                                    else:
+                                        send_error_message(
+                                            "\n\tNo anilist result for id: "
+                                            + str(id)
+                                            + "\n\t\tLink: "
+                                            + str(item.url)
+                                            + "\n"
+                                        )
+                                if hasattr(item, "title"):
+                                    print("\t" + str(item.title))
             else:
                 id_results = shortened_search_results
             for i in id_results:
@@ -2831,6 +2978,7 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
                     data = title
                     # create anilist result object
                     anilist_result = AnilistResult()
+                    anilist_result.format_type = type_of_dir
                     # set the anilist result object properties
                     # check if object has attribute
                     if hasattr(data, "country"):
@@ -3032,10 +3180,10 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
                 print("\t\tBest Match For: " + basename)
                 print("\t\t-----------------------------------------------------")
                 print("\t\tTitle ID: " + str(matches[0].id))
-                send_change_message("\t\tTitles: " + str(matches[0].title))
-                send_change_message("\t\tGenres: " + str(matches[0].genres))
-                send_change_message("\t\tTags: " + str(matches[0].tags))
-                send_change_message("\t\tURL: " + str(matches[0].url))
+                print("\t\tTitles: " + str(matches[0].title))
+                print("\t\tGenres: " + str(matches[0].genres))
+                print("\t\tTags: " + str(matches[0].tags))
+                print("\t\tURL: " + str(matches[0].url))
                 print("\t\tOnline Image URL: " + matches[0].cover.extra_large)
                 print("\t\t-----------------------------------------------------")
                 print("\t\tSSIM Score: " + str(matches[0].similarity_score))
@@ -3121,6 +3269,7 @@ def compare_metadata(book, epub_path, files):
                         book.series, ["NOVEL"], cover_file_path, book.summary
                     )
                     if anilist_metadata:
+                        print_book_result(anilist_metadata, discord=True)
                         if anilist_metadata.genres:
                             book.genres = anilist_metadata.genres
                         if anilist_metadata.tags:
@@ -3152,7 +3301,7 @@ def compare_metadata(book, epub_path, files):
                         if anilist_metadata.tags:
                             book.tags = anilist_metadata.tags
             print(
-                "--------------------------------Metadata Check----------------------------------"
+                "\n--------------------------------Metadata Check----------------------------------"
             )
             # formatting still remains from bookwalker scraper, formatting does not remain when reading in file
             # thus it will infinitely rewrite unless I remove it, this is only a band-aid fix
@@ -3469,6 +3618,7 @@ def compare_metadata(book, epub_path, files):
                     cbz=True,
                 )
             if zip_comments_to_be_written:
+                fields = []
                 # add string "Identifiers" to the beginning of the list
                 combined = "Identifiers: "
                 for item in zip_comments_to_be_written:
@@ -3476,8 +3626,26 @@ def compare_metadata(book, epub_path, files):
                         combined += item + ", "
                     else:
                         combined += item
+                    # split on :
+                    if re.search(r":", item):
+                        fields.append(
+                            {
+                                "name": titlecase(
+                                    remove_underscore_from_name(item.split(":")[0])
+                                ),
+                                "value": item.split(":")[1],
+                                "inline": False,
+                            }
+                        )
                 if combined and data.zip_comment != str(combined):
-                    send_discord_message("Zip Comment: " + combined)
+                    print("\tZip Comment: " + combined + "\n")
+                    if fields:
+                        send_discord_message(
+                            None,
+                            "Zip Comment:",
+                            color=8421504,
+                            fields=fields,
+                        )
                     print(
                         "\tUpdating Zip Comment: \n"
                         + "\t\tFrom: "
@@ -3531,7 +3699,9 @@ def update_metadata(
     try:
         if not cbz:
             if not skip_print:
-                print("\tUpdating " + item + ": ")
+                print(
+                    "\tUpdating " + titlecase(remove_underscore_from_name(item)) + ": "
+                )
                 if not half:
                     print(
                         "\t\tFrom: " + str(data_num) + " \n\t\tTo:   " + str(book_num)
@@ -3552,7 +3722,12 @@ def update_metadata(
                             + str(book_num)
                         )
             else:
-                print("\tUpdating " + item + " to " + str(book_num))
+                print(
+                    "\tUpdating "
+                    + titlecase(remove_underscore_from_name(item))
+                    + " to "
+                    + str(book_num)
+                )
             if item.lower() == "rating" or item.lower() == "index number":
                 book_num = str(book_num)
         elif cbz and (len(data_num) == len(book_num)):
@@ -3567,7 +3742,7 @@ def update_metadata(
                     print("\tAdding " + y_clean[0].capitalize() + ": ")
                 print("\t\tFrom: " + str(old_value) + " \n\t\tTo:   " + str(y_clean[1]))
         else:
-            print("\tUpdating " + item + ": ")
+            print("\tUpdating " + titlecase(remove_underscore_from_name(item)) + ": ")
             print("\t\tFrom: " + str(data_num) + " \n\t\tTo: " + str(book_num))
         combined = ""
         if cbz:
@@ -4408,20 +4583,7 @@ def clean_api_results(
                     and re.search(r"Enix", result.publisher, re.IGNORECASE)
                 ):
                     print(
-                        "\t\tis_ebook=False \n\t\t\tpublisher is square-enix, exception made, using paperback metadata."
-                    )
-                elif (
-                    todays_year
-                    and todays_month
-                    and todays_day
-                    and result.year
-                    and result.month
-                    and result.day
-                ) and (
-                    is_future_date(int(result.day), int(result.month), int(result.year))
-                ):
-                    print(
-                        "\t\tis_ebook=False, but release date is in the future, assuming digital version, is_ebook check bypassed."
+                        "\n\t\tis_ebook=False \n\t\t\tpublisher is square-enix, exception made, using paperback metadata."
                     )
                 else:
                     passed = False
@@ -6881,8 +7043,8 @@ def search_provider(
                 kobo_search_results = text_search_kobo(search)
                 kobo_search_with_and = text_search_kobo(search_with_and_instead_of_amp)
                 # limit total web scraping to 5 results
-                kobo_search_results = kobo_search_results[:5]
-                kobo_search_with_and = kobo_search_with_and[:5]
+                kobo_search_results = kobo_search_results[:10]
+                kobo_search_with_and = kobo_search_with_and[:10]
                 # extend kobo_search_results with kobo_search_with_and
                 kobo_search_results.extend(kobo_search_with_and)
                 # remove all results after 5
@@ -7131,7 +7293,6 @@ def search_provider(
                             "match found through series_id_order_number match with one result."
                         )
                     best_result.book.series = series
-                    best_result.book.volume_number = volume_number
                     best_result.book.number = volume_number
                     best_result.book.volume = volume_number
                     best_result.book.part = part
@@ -7141,7 +7302,7 @@ def search_provider(
                         re.IGNORECASE,
                     ):
                         volume_keyword = ""
-                        if isinstance(best_result.book.volume_number, list):
+                        if isinstance(best_result.book.number, list):
                             volume_keyword = "Volumes "
                             best_result.book.title = volume_keyword + str(
                                 convert_array_to_string_with_dashes(volume_number)
@@ -7155,7 +7316,7 @@ def search_provider(
                             )
                     if not best_result.book.title and volume_number and part:
                         volume_keyword = ""
-                        if isinstance(best_result.book.volume_number, list):
+                        if isinstance(best_result.book.number, list):
                             volume_keyword = "Volumes "
                             best_result.book.title = (
                                 volume_keyword
@@ -7175,7 +7336,7 @@ def search_provider(
                             )
                     elif not best_result.book.title and volume_number and not part:
                         volume_keyword = ""
-                        if isinstance(best_result.book.volume_number, list):
+                        if isinstance(best_result.book.number, list):
                             volume_keyword = "Volumes "
                             best_result.book.title = volume_keyword + str(
                                 convert_array_to_string_with_dashes(volume_number)
@@ -7340,7 +7501,7 @@ def check_if_zip_file_contains_comic_info_xml(zip_file):
     with zipfile.ZipFile(zip_file, "r") as zip_ref:
         list = zip_ref.namelist()
         for name in list:
-            if os.path.basename(name).lower() == "ComicInfo.xml".lower():
+            if name.lower() == "ComicInfo.xml".lower():
                 return True
     return False
 
@@ -7395,6 +7556,8 @@ def process_file(file_name, files):
     file_path = os.path.join(root, file_name)
     zip_comments = str(get_zip_comment(file_path))
     extension = get_file_extension(file_name)
+    series = get_series_name_from_file_name(file_name)
+    part = get_volume_part(file_name)
     if skip_volumes_older_than_x_time and os.path.isfile(file_path):
         modification_age = get_modiciation_age(file_path)
         creation_age = get_creation_age(file_path)
@@ -7404,6 +7567,14 @@ def process_file(file_name, files):
     try:
         multi_volume = check_for_multi_volume_file(file_name)
         volume_number = remove_everything_but_volume_num([file_name])
+        if volume_number and not isinstance(volume_number, list):
+            volume_number = set_num_as_float_or_int(volume_number)
+        elif volume_number and isinstance(volume_number, list):
+            converted_numbers = []
+            for num in volume_number:
+                converted_numbers.append(set_num_as_float_or_int(num))
+            if converted_numbers and len(converted_numbers) == len(volume_number):
+                volume_number = converted_numbers
         if not volume_number and is_one_shot(file_name, root):
             volume_number = 1
         if not isinstance(volume_number, list):
@@ -7474,7 +7645,7 @@ def process_file(file_name, files):
                 ):
                     print("\tno comicinfo contents found, skipping")
                     return None
-                if skip_file_if_isbn_in_zip_comment:
+                if skip_file_if_isbn_in_zip_comment and zip_comments:
                     if re.search(rf"{isbn_13_regex}", zip_comments):
                         print("\n" + file_name + " already contains isbn, skipping...")
                         print("\t" + zip_comments)
@@ -7520,7 +7691,7 @@ def process_file(file_name, files):
                     if result:
                         break
                 else:
-                    print("\n\t" + provider.name + " is disabled, skipping...\n")
+                    print("\n\t" + provider.name + " is disabled, skipping...")
             if not result and (not only_image_comparision or extension == "cbz"):
                 print(
                     "----------------------------------------------------------------"
@@ -7530,63 +7701,93 @@ def process_file(file_name, files):
                     "----------------------------------------------------------------"
                 )
                 result = zip_file_stuff(file_path)
+                if result:
+                    clean_results = [result.book]
+                    volume_id_result = google_api_isbn_lookup(
+                        0,
+                        file_path,
+                        skip_title_check=True,
+                        volume_id=result.book.google_volume_id,
+                        max_results_num=40,
+                    )
+                    if volume_id_result:
+                        clean_results.append(volume_id_result)
+                    clean_results = clean_api_results(
+                        clean_results,
+                        volume_number,
+                        "NONE",
+                        multi_volume,
+                        series,
+                        extension,
+                        skip_vol_nums_equal=True,
+                        skip_contains_first_word=True,
+                        skip_omnibus_check=True,
+                        skip_manga_keyword_check=True,
+                        skip_series_similarity=True,
+                        skip_categories_check=True,
+                    )
+                    if clean_results:
+                        result = Result(clean_results[0], None)
+                        result.book.series = series
+                        result.book.number = volume_number
+                        result.book.volume = volume_number
+                        result.book.part = part
+                        if re.search(
+                            r"Volumes?",
+                            result.book.title,
+                            re.IGNORECASE,
+                        ):
+                            volume_keyword = ""
+                            if isinstance(result.book.number, list):
+                                volume_keyword = "Volumes "
+                                result.book.title = volume_keyword + str(
+                                    convert_array_to_string_with_dashes(volume_number)
+                                )
+                            else:
+                                volume_keyword = "Volume "
+                                result.book.title = volume_keyword + str(volume_number)
+                            if part:
+                                result.book.title = (
+                                    result.book.title + " Part " + str(part)
+                                )
+                        if not result.book.title and volume_number and part:
+                            volume_keyword = ""
+                            if isinstance(result.book.number, list):
+                                volume_keyword = "Volumes "
+                                result.book.title = (
+                                    volume_keyword
+                                    + str(
+                                        convert_array_to_string_with_dashes(
+                                            volume_number
+                                        )
+                                    )
+                                    + " Part "
+                                    + str(part)
+                                )
+                            else:
+                                volume_keyword = "Volume "
+                                result.book.title = (
+                                    volume_keyword
+                                    + str(volume_number)
+                                    + " Part "
+                                    + str(part)
+                                )
+                        elif not result.book.title and volume_number and not part:
+                            volume_keyword = ""
+                            if isinstance(result.book.number, list):
+                                volume_keyword = "Volumes "
+                                result.book.title = volume_keyword + str(
+                                    convert_array_to_string_with_dashes(volume_number)
+                                )
+                            else:
+                                volume_keyword = "Volume "
+                                result.book.title = volume_keyword + str(volume_number)
             if result and hasattr(result, "book"):
                 if result.book.number == volume_number:
-                    # get today's day from today's date
-                    todays_day = datetime.now().strftime("%d")
-                    if todays_day:
-                        todays_day = int(todays_day)
-                    else:
-                        todays_day = ""
-                    if result.book.published_date and re.search(
-                        r"-", result.book.published_date
-                    ):
-                        if re.search(
-                            r"((\d\d\d\d)-(\d+)-(\d+))", result.book.published_date
-                        ):
-                            day = result.book.published_date.split("-")[2]
-                        else:
-                            day = result.book.published_date.split("-")[1]
-                    else:
-                        day = ""
-                    if day:
-                        day = int(day)
-                    else:
-                        day = ""
-                    if (
-                        (
-                            (
-                                result.book.is_ebook
-                                and result.book.for_sale
-                                and result.book.for_sale == "FOR_SALE"
-                            )
-                            or allow_non_is_ebook_results
-                        )
-                        or (
-                            not check_if_date_is_past(
-                                result.book.day, result.book.month, result.book.year
-                            )
-                            and todays_day
-                            and day
-                            and day == todays_day + 1
-                        )
-                        or (
-                            square_enix_bypass
-                            and re.search(
-                                r"Square", result.book.publisher, re.IGNORECASE
-                            )
-                            and re.search(r"Enix", result.book.publisher, re.IGNORECASE)
-                        )
-                        or (
-                            result.book.day
-                            and result.book.month
-                            and result.book.year
-                            and is_future_date(
-                                int(result.book.day),
-                                int(result.book.month),
-                                int(result.book.year),
-                            )
-                        )
+                    if ((result.book.is_ebook) or allow_non_is_ebook_results) or (
+                        square_enix_bypass
+                        and re.search(r"Square", result.book.publisher, re.IGNORECASE)
+                        and re.search(r"Enix", result.book.publisher, re.IGNORECASE)
                     ):
                         if result.book.summary:
                             print_book_result(result, discord=True)
@@ -7765,7 +7966,7 @@ if __name__ == "__main__":
             use_internal_cover = False
     stop = False
     if args.path or args.file:
-        # args.file = "/srv/dev-disk-by-uuid-4da94d03-b430-471f-af24-6a27bf7fee2e/manga/public/World's End Harem - Fantasia/World's End Harem - Fantasia v07 (2022) (Digital) (LuCaZ).cbz"
+        # args.file = "/srv/dev-disk-by-uuid-4da94d03-b430-471f-af24-6a27bf7fee2e/manga/public/Shikimori's Not Just a Cutie/Shikimori's Not Just a Cutie v11 (2022) (Kodansha USA) (Digital) (1r0n).cbz"
         if args.file:
             args.path = os.path.dirname(args.file)
         if os.path.exists(args.path):
