@@ -2910,6 +2910,7 @@ def filter_out_non_ids(results):
                 new_results.append(item)
     return new_results
 
+
 # Filters the results based on whether the first word in the basename matches the title or synonyms.
 def filter_by_first_word(results, first_word):
     filtered_results = [
@@ -2933,6 +2934,7 @@ def filter_by_first_word(results, first_word):
 
     return filtered_results
 
+
 # Prints our anilist results
 # as we filter step by step
 # Makes it easier to see what is being filtered out
@@ -2940,182 +2942,187 @@ def print_titles(results):
     for result in results:
         print(f"\t\t\t{str(result.title)}")
 
+# Searches anilist for a matching series and returns it.
 def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
     end_result = None
     ani_search_sleep_time = 5
+
     try:
         client = anilist.Client()
-        print(
-            "--------------------------------------------------------------------------------\n"
-            + "Searching Anilist For: "
-            + basename
-            + " "
-            + str(type_of_dir)
-            + "\n--------------------------------------------------------------------------------"
-        )
+
+        # Print search message
+        print(f"{'-' * 80}\nSearching Anilist: {basename} {type_of_dir}\n{'-' * 80}")
+
+        # Prepare fields for Discord message
         fields = [
-            {
-                "name": "Search:",
-                "value": basename,
-                "inline": False,
-            },
-            {
-                "name": "Filter Type(s):",
-                "value": str(type_of_dir),
-                "inline": False,
-            },
+            {"name": "Search:", "value": basename, "inline": False},
+            {"name": "Filter Type(s):", "value": str(type_of_dir), "inline": False},
         ]
-        shortened_search = ""
-        shortened_basename = ""
+
+        # Initialize variable for shortened search
         shortened_search_results = []
-        if re.search(r"((\s(-|\+)|:)\s)", basename):
-            shortened_basename = re.sub(r"((\s(-|\+)|:)\s.*)", "", basename).strip()
+        search = []
+        country_regex_filter = r"(jpn?|japan|japanese)"
+
+        # Search for/with Shortened_basename
+        shortened_basename = (
+            re.sub(r"((\s(-|\+)|:)\s.*)", "", basename).strip()
+            if re.search(r"((\s(-|\+)|:)\s)", basename)
+            else ""
+        )
+
         if shortened_basename:
-            fields.append(
+            fields.insert(
+                1,
                 {
                     "name": "Shortened Search:",
                     "value": shortened_basename,
                     "inline": False,
-                }
+                },
             )
-            # move second item to the end of the list
-            if len(fields) > 1:
-                fields.append(fields.pop(1))
-        send_discord_message(
-            None,
-            "Searching Anilist:",
-            color=8421504,
-            fields=fields,
-        )
-        time.sleep(ani_search_sleep_time)
-        search = client.search_manga(basename, limit=10)
-        if shortened_basename:
-            time.sleep(ani_search_sleep_time)
+            send_discord_message(
+                None, "Searching Anilist:", color=8421504, fields=fields
+            )
             shortened_search = client.search_manga(shortened_basename, limit=10)
-            if shortened_search:
-                shortened_search = filter_out_non_ids(shortened_search)
-        if shortened_search:
-            shortened_search_results = []
-            for i in shortened_search:
-                time.sleep(ani_search_sleep_time)
-                shortened_search_results.append(client.get_manga(i.id))
-            if shortened_search_results:
-                shortened_search_results = filter_by_country(
-                    shortened_search_results, r"(jpn?|japan|japanese)"
-                )
-                shortened_search_results = filter_by_format(
-                    shortened_search_results, type_of_dir
-                )
-                shortened_search_results = clean_below_similarity_score(
-                    shortened_basename,
-                    shortened_search_results,
-                    volume_one_summary,
-                    require_summary_match=True,
-                )
-            if shortened_search_results and len(shortened_search_results) == 1:
+            time.sleep(ani_search_sleep_time)
+            shortened_search = (
+                filter_out_non_ids(shortened_search) if shortened_search else []
+            )
+            time.sleep(ani_search_sleep_time)
+            shortened_search_results = [
+                client.get_manga(i.id) for i in shortened_search
+            ]
+        else:
+            send_discord_message(
+                None, "Searching Anilist:", color=8421504, fields=fields
+            )
+            time.sleep(ani_search_sleep_time)
+            # Search for/with Basename
+            search = client.search_manga(basename, limit=10)
+
+        # Process shortened search results
+        if shortened_search_results:
+            print(f"\tShortened Starting Results: {len(shortened_search_results)}")
+            print_titles(shortened_search_results)
+
+            # Filter by country
+            shortened_search_results = filter_by_country(
+                shortened_search_results, country_regex_filter
+            )
+
+            print(
+                f"\n\t\tCountry Results: {len(shortened_search_results)} ({country_regex_filter})"
+            )
+            print_titles(shortened_search_results)
+
+            # Filter by format
+            shortened_search_results = filter_by_format(
+                shortened_search_results, type_of_dir
+            )
+
+            print(
+                f"\n\t\tFormat Results: {len(shortened_search_results)} ({type_of_dir})"
+            )
+            print_titles(shortened_search_results)
+
+            # Filter by similarity score
+            shortened_search_results = clean_below_similarity_score(
+                shortened_basename,
+                shortened_search_results,
+                volume_one_summary,
+                require_summary_match=True,
+            )
+
+            print(f"\n\t\tSimilarity Score Results: {len(shortened_search_results)}")
+            print_titles(shortened_search_results)
+
+            if len(shortened_search_results) == 1:
                 search = shortened_search_results
                 send_change_message(
-                    "\t\tFound result using shortened basename: "
-                    + str(shortened_search_results[0].title)
+                    f"\n\t\tFound result using shortened basename: \n\t\t\t{shortened_search_results[0].title}"
                 )
-            else:
-                shortened_search_results = []
-        if search and len(search) > 0:
-            matches = []
+
+        # Process search results
+        if search:
             id_results = []
-            id_results_filtered = []
-            if not shortened_search_results:
-                for s in search:
-                    if isinstance(s, list):
-                        for item in s:
-                            if item:
-                                if hasattr(item, "id") and item.id:
-                                    id = item.id
-                                    time.sleep(ani_search_sleep_time)
-                                    result = client.get_manga(id)
-                                    if result:
-                                        id_results.append(result)
-                                    else:
-                                        send_error_message(
-                                            "\n\tNo anilist result for id: "
-                                            + str(id)
-                                            + "\n\t\tLink: "
-                                            + str(item.url)
-                                            + "\n"
-                                        )
-                                if hasattr(item, "title"):
-                                    print("\t" + str(item.title))
-            else:
+            if shortened_search_results:
                 id_results = shortened_search_results
-            for i in id_results:
-                if not (
-                    hasattr(i, "country")
-                    and i.country
-                    and re.search(
-                        r"(jpn?|japan|japanese)",
-                        i.country,
-                        re.IGNORECASE,
-                    )
-                ):
-                    print(
-                        "\t\t"
-                        + str(i.title)
-                        + " - "
-                        + str(i.url)
-                        + " has an invalid country"
-                        + " - country: "
-                        + str(i.country)
-                        + ", removing from results"
-                    )
-                    id_results.remove(i)
-            print("\n\tTotal Search Results: " + str(len(id_results)))
-            id_results_filtered = [
-                x
-                for x in id_results
-                if hasattr(x, "format") and type_of_dir and x.format in type_of_dir
-            ]
-            id_results_filtered = clean_below_similarity_score(
-                basename, id_results_filtered, volume_one_summary
-            )
-            # regex the first word in basename
-            first_word_in_base_name = re.search(
-                r"\w+", remove_punctuation(basename)
-            ).group(0)
-            id_results_filtered_first_word = []
-            if first_word_in_base_name:
-                id_results_filtered_first_word = [
-                    x
-                    for x in id_results_filtered
-                    if hasattr(x, "title")
-                    and x.title
-                    and (
-                        re.search(
-                            first_word_in_base_name,
-                            remove_punctuation(str(x.title)),
-                            re.IGNORECASE,
-                        )
-                        or re.search(
-                            first_word_in_base_name,
-                            remove_punctuation(str(x.synonyms)),
-                            re.IGNORECASE,
-                        )
-                    )
+            else:
+                # Get manga results for all valid items
+                id_results = [
+                    client.get_manga(item.id)
+                    for s in search
+                    if isinstance(s, list)
+                    for item in s
+                    if item and hasattr(item, "id") and item.id
                 ]
-            print(
-                "\n\tTotal Filtered Results: "
-                + str(len(id_results_filtered_first_word))
-                + " ("
-                + first_word_in_base_name
-                + ")"
-            )
-            if id_results_filtered_first_word:
-                for title in id_results_filtered_first_word[:]:
-                    data = title
-                    # create anilist result object
+
+                print(f"\tStarting Results: {len(id_results)}")
+                print_titles(id_results)
+
+                time.sleep(ani_search_sleep_time)
+
+                # Filter by country
+                id_results_country_filter = filter_by_country(
+                    id_results, country_regex_filter
+                )
+
+                print(
+                    f"\n\t\tCountry Results: {len(id_results_country_filter)} ({country_regex_filter})"
+                )
+                print_titles(id_results_country_filter)
+
+                # Filter by format
+                filter_results_format = filter_by_format(
+                    id_results_country_filter, type_of_dir
+                )
+
+                print(
+                    f"\n\t\tFormat Results: {len(filter_results_format)} ({type_of_dir})"
+                )
+                print_titles(filter_results_format)
+
+                # Filter by similarity score
+                filter_results_sim_score = clean_below_similarity_score(
+                    basename, filter_results_format, volume_one_summary
+                )
+
+                print(
+                    f"\n\t\tSimilarity Score Results: {len(filter_results_sim_score)}"
+                )
+                print_titles(filter_results_sim_score)
+
+                # Get the first word in the basename
+                first_word_in_base_name = (
+                    re.search(r"\w+", remove_punctuation(basename)).group(0)
+                    if re.search(r"\w+", remove_punctuation(basename))
+                    else ""
+                )
+
+                id_results_filtered_first_word = filter_results_sim_score
+
+                # Filter by first word in the basename, if we have a first_word_in_base_name
+                if first_word_in_base_name:
+                    id_results_filtered_first_word = filter_by_first_word(
+                        filter_results_sim_score, first_word_in_base_name
+                    )
+                    print(
+                        f"\n\t\tFirst Word Results: {len(id_results_filtered_first_word)} ({first_word_in_base_name})"
+                    )
+                    print_titles(id_results_filtered_first_word)
+
+                # Reassign id_results
+                id_results = filter_results_sim_score
+
+            print(f"\n\n\tFinal Results: {len(id_results)}")
+            print_titles(id_results)
+
+            if id_results:
+                matches = []
+                for data in id_results:
                     anilist_result = AnilistResult()
                     anilist_result.format_type = type_of_dir
-                    # set the anilist result object properties
-                    # check if object has attribute
+
                     # Define a list of attribute names
                     ATTRIBUTES = [
                         "country",
@@ -3137,103 +3144,96 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
                         "volumes",
                     ]
 
-                    # Loop over each attribute
+                    # Loop over each attribute and set the value on the result object
                     for attr in ATTRIBUTES:
-                        # Check if the attribute exists in the data object
-                        if hasattr(data, attr):
-                            # Get the value of the attribute from the data object
-                            value = getattr(data, attr)
-                            # Check if the value is not empty
-                            if value:
-                                # If the value is a string, set it directly on the result object
-                                if isinstance(value, str):
-                                    setattr(anilist_result, attr, value)
-                                # If the value is a list, sort it and set it on the result object
-                                elif isinstance(value, list):
-                                    setattr(anilist_result, attr, sorted(value))
-                                # If the value is anything else, set it directly on the result object
-                                else:
-                                    setattr(anilist_result, attr, value)
-                            # If the value is empty, set an empty string on the result object
-                            else:
-                                setattr(anilist_result, attr, "")
-                        # If the attribute does not exist in the data object, set an empty string on the result object
-                        else:
-                            setattr(anilist_result, attr, "")
+                        value = getattr(data, attr, "")
+                        setattr(
+                            anilist_result,
+                            attr,
+                            sorted(value)
+                            if attr in ["tags", "genres"] and isinstance(value, list)
+                            else value,
+                        )
 
-                    if (
+                    # Determine if the result is a match
+                    if len(id_results) == 1:
+                        anilist_result.similarity_score = 0
+                        matches.append(anilist_result)
+                    elif (
                         anilist_result.cover
                         and anilist_result.title
                         and cover_file_path
+                        and os.path.isfile(cover_file_path)
                     ):
-                        if os.path.isfile(cover_file_path):
-                            online_image_link = anilist_result.cover
+                        online_image_link = anilist_result.cover
+                        sizes = ["extra_large", "large", "medium", "small", "tiny"]
 
-                            # Get image links
-                            sizes = ["extra_large", "large", "medium", "small", "tiny"]
-                            images = [
-                                getattr(online_image_link, size)
-                                for size in sizes
-                                if hasattr(online_image_link, size)
-                            ]
+                        # Get the images from each size
+                        images = [
+                            getattr(online_image_link, size)
+                            for size in sizes
+                            if hasattr(online_image_link, size)
+                        ]
 
-                            # Process images
-                            if len(images) == 1:
-                                score = process_image_link_temp_for_anilist(
-                                    cover_file_path, online_image_link
-                                )[0]
-                            else:
-                                scores = []
-                                for link in images:
-                                    score_result = process_image_link_temp_for_anilist(
+                        # Get the scores from the images
+                        if len(images) == 1:
+                            score = process_image_link_temp_for_anilist(
+                                cover_file_path, online_image_link
+                            )[0]
+                        else:
+                            scores = [
+                                score_result[0]
+                                for link in images
+                                if (
+                                    score_result := process_image_link_temp_for_anilist(
                                         cover_file_path, link
                                     )
-                                    if score_result:
-                                        scores.append(score_result[0])
-                                score = max(scores) if scores else 0
+                                )
+                            ]
 
-                            # Handle results
-                            if not score:
-                                send_error_message("Score does not have a value!")
-                            elif (
-                                score >= required_image_ssim_score
-                                or len(id_results_filtered_first_word) == 1
-                            ):
-                                anilist_result.similarity_score = score
-                                matches.append(anilist_result)
-                        else:
-                            send_error_message("\tNo cover file found")
+                        score = max(scores) if scores else 0
+
+                        # Check for a valid score
+                        if not score:
+                            send_error_message("Score does not have a value!")
+                        # Check if the score is above the required score
+                        elif score >= required_image_ssim_score:
+                            anilist_result.similarity_score = score
+                            matches.append(anilist_result)
+                    else:
+                        send_error_message("\tNo cover file found")
 
             else:
                 send_error_message("\tNo results found")
-            # print the match in matches with the highest similarity score
-            if len(matches) > 0:
-                # order the matches array by the highest similarity score
-                matches = sorted(
-                    matches,
-                    key=lambda x: x.similarity_score,
-                    reverse=True,
-                )
-                matches[0].local_image_path = cover_file_path
-                print("\t\t-----------------------------------------------------")
-                print("\t\tBest Match For: " + basename)
-                print("\t\t-----------------------------------------------------")
-                print("\t\tTitle ID: " + str(matches[0].id))
-                print("\t\tTitles: " + str(matches[0].title))
-                print("\t\tGenres: " + str(matches[0].genres))
-                print("\t\tTags: " + str(matches[0].tags))
-                print("\t\tURL: " + str(matches[0].url))
-                print("\t\tOnline Image URL: " + matches[0].cover.extra_large)
-                print("\t\t-----------------------------------------------------")
-                print("\t\tSSIM Score: " + str(matches[0].similarity_score))
-                print("\t\t-----------------------------------------------------")
-                end_result = matches[0]
+
+            if matches:
+                best_match = max(matches, key=lambda x: x.similarity_score)
+                best_match.local_image_path = cover_file_path
+
+                print(f"\n\t\t{'-' * 53}\n\t\tBest Match: {basename}\n\t\t{'-' * 53}")
+                print(f"\t\tTitle ID: {best_match.id}")
+                print(f"\t\tTitles: {best_match.title}")
+                print(f"\t\tGenres: {best_match.genres}")
+                print(f"\t\tTags: {best_match.tags}")
+                print(f"\t\tURL: {best_match.url}")
+                print(f"\t\tOnline Image URL: {best_match.cover.extra_large}")
+                if best_match.similarity_score:
+                    print(
+                        f"\t\t{'-' * 53}\n\t\tSSIM Score: {best_match.similarity_score}\n\t\t{'-' * 53}\n"
+                    )
+                else:
+                    print(
+                        f"\t\t{'-' * 53}\n\t\tMatched through one result remaining.\n\t\t{'-' * 53}\n"
+                    )
+
+                end_result = best_match
             else:
                 send_error_message("\t\tNo matches found.")
         else:
             send_error_message("\tNo search results found.")
     except Exception as e:
-        print(e)
+        send_error_message(e)
+
     if not end_result:
         write_to_file(
             "no_search_results_from_anilist.txt",
@@ -3241,6 +3241,7 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
             without_date=True,
             check_for_dup=True,
         )
+
     return end_result
 
 
@@ -4850,7 +4851,7 @@ def process_image_link(
                 if image_link_cache_item not in image_link_cache:
                     image_link_cache.append(image_link_cache_item)
         except Exception as e:
-            print(e)
+            send_error_message(e)
             return None
     online_image = Image.open(io.BytesIO(online_image_data.content))
     online_image = np.array(online_image)
