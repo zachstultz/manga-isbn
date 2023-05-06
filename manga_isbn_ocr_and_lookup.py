@@ -444,21 +444,21 @@ def send_discord_message(
     thumbnail_local=None,
 ):
     hook = None
-    global webhook
+    global discord_webhook_url
     global last_hook_index
     global script_version
-    if webhook:
+    if discord_webhook_url:
         if not last_hook_index and last_hook_index != 0:
-            hook = webhook[0]
+            hook = discord_webhook_url[0]
         else:
-            if last_hook_index == len(webhook) - 1:
-                hook = webhook[0]
+            if last_hook_index == len(discord_webhook_url) - 1:
+                hook = discord_webhook_url[0]
             else:
-                hook = webhook[last_hook_index + 1]
+                hook = discord_webhook_url[last_hook_index + 1]
     if hook:
-        last_hook_index = webhook.index(hook)
+        last_hook_index = discord_webhook_url.index(hook)
 
-    webhook_obj = DiscordWebhook(url=None)
+    webhook = DiscordWebhook(url=None)
     embed = None
     try:
         if hook:
@@ -479,17 +479,17 @@ def send_discord_message(
                     title = title[:253] + "..."
                 embed.title = title
             if message and not embed:
-                webhook_obj.content = message
+                webhook.content = message
             elif message and embed:
                 embed.description = message
-            webhook_obj.url = hook
+            webhook.url = hook
             if rate_limit:
-                webhook_obj.rate_limit_retry = rate_limit
+                webhook.rate_limit_retry = rate_limit
             if embed:
                 if image_url and not image_local:
                     embed.set_image(url=image_url)
                 elif image_local and not thumbnail_local:
-                    webhook_obj.add_file(file=image_local, filename="cover.jpg")
+                    webhook.add_file(file=image_local, filename="cover.jpg")
                     embed.set_image(url="attachment://cover.jpg")
                     embed.set_thumbnail(url="attachment://cover.jpg")
                 if thumbnail_url and not thumbnail_local:
@@ -524,10 +524,10 @@ def send_discord_message(
                     if len(author["name"]) > 256:
                         author["name"] = author["name"][:253] + "..."
                     embed.author = author
-                webhook_obj.add_embed(embed)
+                webhook.add_embed(embed)
             if proxies:
-                webhook_obj.proxies = proxies
-            response = webhook_obj.execute()
+                webhook.proxies = proxies
+            response = webhook.execute()
         else:
             return
     except Exception as e:
@@ -1350,15 +1350,6 @@ def print_diff(s1, s2):
 def convert_array_to_string_with_dashes(array):
     # Use a generator expression to convert each integer to a string, then join them with dashes
     return "-".join(str(num) for num in array)
-
-
-# Converts the input array to a string separated by the given separator.
-def array_to_string(array, separator):
-    # Convert the input to a list of strings, then join them with the separator
-    if isinstance(array, list):
-        return separator.join(map(str, array))
-    else:
-        return str(array)
 
 
 # Looks up the IBSN number on Google Books API and returns the information
@@ -2284,19 +2275,6 @@ def remove_non_cbz_epub(files):
     return files
 
 
-# Retrieves ISBN from the epub file by searching for the .opf file and processing its contents for the ISBN.
-def get_isbn_from_epub(epub_file):
-    with zipfile.ZipFile(epub_file, "r") as zip_ref:
-        for file in zip_ref.namelist():
-            if file.endswith(".opf"):
-                with zip_ref.open(file) as f:
-                    contents = f.read().decode("utf-8")
-                    isbn = isbn_search(contents, epub_file)
-                    if isbn:
-                        return isbn
-    return False
-
-
 # Checks the epub file for a summary inside of any .opf file.
 def check_epub_for_descriptor(epub_file):
     with zipfile.ZipFile(epub_file, "r") as zip_ref:
@@ -2331,21 +2309,6 @@ def print_end_of_program_stats():
 # Converts an array of strings into a single string separated by spaces.
 def convert_array_to_string(array):
     return " ".join(array)
-
-
-def clean_epub_writers(writers_from_epub):
-    writers = []
-    for item in writers_from_epub:
-        # Remove any non-alphabetic characters before a space
-        item = re.sub(r"[^a-zA-Z]+\s", "", item)
-        # Remove any punctuation characters
-        item = item.translate(str.maketrans("", "", string.punctuation))
-        # Remove any leading/trailing whitespace
-        item = item.strip()
-        # Append the cleaned name to the list if it doesn't already exist
-        if item not in writers:
-            writers.append(item)
-    return writers
 
 
 # Convert a writers object to a list of strings.
@@ -2642,7 +2605,9 @@ def clean_below_similarity_score(
     bases = []
     new_results = []
     volume_one_setences = []
+
     if volume_one_summary:
+        # Tokenize volume one summary sentences
         volume_one_setences_search = sent_tokenize(volume_one_summary.strip())
         if volume_one_setences_search:
             volume_one_setences = volume_one_setences_search
@@ -2650,15 +2615,19 @@ def clean_below_similarity_score(
             print("\tNo sentences found in: " + volume_one_summary)
     else:
         print("\tNo volume one summary passed in.")
+
     clean_base = remove_punctuation(basename).strip()
     bases.append(clean_base)
+
+    # Translate base name if required
     if translate_titles and not clean_base.isdigit() and not require_summary_match:
         try:
             clean_base_jp = ts.google(clean_base, to_language="ja")
             bases.append(clean_base_jp)
         except:
             print("\tFailed to translate: " + clean_base)
-    # loop through arary_list, and put any item that has item.title.english at the front of the list
+
+    # Sort array_list based on the presence of the English title
     if len(array_list) > 1:
         for item in array_list[:]:
             if hasattr(item, "title"):
@@ -2667,6 +2636,8 @@ def clean_below_similarity_score(
                         # remove and insert at the front of the list
                         array_list.remove(item)
                         array_list.insert(0, item)
+
+    # Sort array_list based on the first letter of the English title
     first_letter_of_basename = re.search(r"^[a-zA-Z]", clean_base)
     if first_letter_of_basename:
         first_letter_of_basename = first_letter_of_basename.group(0)
@@ -2682,9 +2653,12 @@ def clean_below_similarity_score(
                             # remove and insert at the front of the list
                             array_list.remove(item)
                             array_list.insert(0, item)
+
+    # Loop through items in the array_list
     for item in array_list:
         sentences = []
         if hasattr(item, "description") and item.description:
+            # Tokenize item description sentences
             sentences_search = sent_tokenize(item.description.strip())
             if sentences_search:
                 sentences = sentences_search
@@ -2692,15 +2666,20 @@ def clean_below_similarity_score(
                 print("\tNo sentences found in: " + item.description)
         else:
             print("\tNo description found to split sentences from.")
+
         comparisions = []
         # remove any item in volume_one_sentences and sentences where length is less than 3
         if volume_one_setences and sentences:
+            # Filter sentences with length greater than or equal to 3
             volume_one_setences = [
                 sentence for sentence in volume_one_setences if len(sentence) >= 3
             ]
             sentences = [sentence for sentence in sentences if len(sentence) >= 3]
-            # remove any html from the sentences
+
+            # Remove any HTML tags from the sentences
             sentences = [re.sub(r"<[^>]*>", "", sentence) for sentence in sentences]
+
+            # Compare each pair of sentences from volume_one_sentences and item_sentences
             for sentence in volume_one_setences:
                 for compare_sentence in sentences:
                     clean_sentence = ""
@@ -2735,7 +2714,9 @@ def clean_below_similarity_score(
                                 + clean_compare_sentence
                                 + " empty after removing punctuation."
                             )
+
         if not require_summary_match:
+            # Process and translate titles if required
             if hasattr(item.title, "english"):
                 compare_name_english = remove_punctuation(item.title.english).strip()
                 if compare_name_english not in comparisions:
@@ -2800,6 +2781,8 @@ def clean_below_similarity_score(
                         print("\t\tTranslated Native: " + compare_translated_native)
                     except Exception as e:
                         send_error_message(e)
+
+            # Process and translate synonyms if required
             if hasattr(item, "synonyms"):
                 for synonym in item.synonyms:
                     if synonym not in comparisions:
@@ -2817,6 +2800,8 @@ def clean_below_similarity_score(
                                 comparisions.append(compare_translated_synonym)
                         except Exception as e:
                             send_error_message(e)
+
+            # Compare base names with comparisons and check similarity score
             match = False
             for base in bases:
                 if not match:
@@ -2942,6 +2927,7 @@ def print_titles(results):
     for result in results:
         print(f"\t\t\t{str(result.title)}")
 
+
 # Searches anilist for a matching series and returns it.
 def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
     end_result = None
@@ -2964,13 +2950,14 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
         search = []
         country_regex_filter = r"(jpn?|japan|japanese)"
 
-        # Search for/with Shortened_basename
+        # Get the Shortened Basename
         shortened_basename = (
             re.sub(r"((\s(-|\+)|:)\s.*)", "", basename).strip()
             if re.search(r"((\s(-|\+)|:)\s)", basename)
             else ""
         )
 
+        # Search with the Shortened Basename
         if shortened_basename:
             fields.insert(
                 1,
@@ -8128,137 +8115,170 @@ def has_multiple_numbers(file_name):
 
 if __name__ == "__main__":
     parser = image_arg_parser()
-    # args = parser.parse_args()
-    options = {
-        "webhook": lambda x: [
-            url for item in x for url in (item if isinstance(item, list) else [item])
-        ],
-        "accepted_file_types": lambda x: x.split(",")
-        if x and "," in x
-        else [x]
-        if x
-        else accepted_file_types,
-        "skip_file_if_isbn_in_zip_comment": lambda x: x and x.lower() == "true"
-        if x
-        else None,
-        "skip_all_non_comic_tagger_tagged": lambda x: x and x.lower() == "true"
-        if x
-        else None,
-        "only_image_comparision": lambda x: x.lower() == "true" if x else None,
-        "skip_letters": lambda x: x.lower() == "true" if x else None,
-        "skip_comic_info": lambda x: x.lower() == "true" if x else None,
-        "manualmetadata": lambda x: x.lower() == "true" if x else None,
-        "skip_novels_with_metadata": lambda x: x.lower() == "true" if x else None,
-        "skip_non_volume_ones": lambda x: x.lower() == "true" if x else None,
-        "skip_volumes_older_than_x_time": lambda x: x.lower() == "true" if x else None,
-        "skip_volume_if_already_has_anilist_id": lambda x: x and x.lower() == "true"
-        if x
-        else None,
-        "skip_google_metadata": lambda x: x.lower() == "true" if x else None,
-        "use_internal_cover": lambda x: x.lower() == "true" if x else None,
-        "skip_volume_one": lambda x: x.lower() == "true" if x else None,
-        "skip_web_link": lambda x: x.lower() == "true" if x else None,
-        "only_update_if_new_title": lambda x: x.lower() == "true" if x else None,
-    }
-
-    args = vars(parser.parse_args())
-    for option, value in options.items():
-        test = value(args.get(option))
-        if option in globals() and test != None:
-            if isinstance(test, str):
-                if test.lower() == "true":
-                    globals()[option] = True
-                elif test.lower() == "false":
-                    globals()[option] = False
-                else:
-                    globals()[option] = test
-            else:
-                globals()[option] = test
-
-    if args["scrape_google"]:
+    args = parser.parse_args()
+    if args.webhook is not None:
+        for item in args.webhook:
+            for hook in item:
+                if hook not in discord_webhook_url:
+                    discord_webhook_url.append(hook)
+    if args.accepted_file_types:
+        if re.search(r",", args.accepted_file_types):
+            accepted_file_types = args.accepted_file_types.split(",")
+        else:
+            accepted_file_types = [args.accepted_file_types]
+    if args.skip_file_if_isbn_in_zip_comment:
+        if args.skip_file_if_isbn_in_zip_comment.lower().strip() == "true":
+            skip_file_if_isbn_in_zip_comment = True
+        else:
+            skip_file_if_isbn_in_zip_comment = False
+    if args.skip_all_non_comic_tagger_tagged:
+        if args.skip_all_non_comic_tagger_tagged.lower().strip() == "true":
+            skip_all_non_comic_tagger_tagged = True
+        else:
+            skip_all_non_comic_tagger_tagged = False
+    if args.only_image_comparision:
+        if args.only_image_comparision.lower() == "true":
+            only_image_comparision = True
+        elif args.only_image_comparision.lower() == "false":
+            only_image_comparision = False
+    if args.skip_letters:
+        skip_letters = True
+        accepted_letters = args.skip_letters
+    if args.skip_comic_info:
+        if args.skip_comic_info.lower() == "true":
+            skip_if_file_contains_comic_info = True
+    if args.manualmetadata:
+        if args.manualmetadata == "True" or args.manualmetadata == "true":
+            manual_metadata_write_approval = True
+        else:
+            manual_metadata_write_approval = False
+    if args.skip_novels_with_metadata:
+        if args.skip_novels_with_metadata.lower() == "true":
+            skip_novels_with_metadata = True
+        else:
+            skip_novels_with_metadata = False
+    if args.skip_non_volume_ones:
+        if args.skip_non_volume_ones.lower() == "true":
+            skip_non_volume_ones = True
+        else:
+            skip_non_volume_ones = False
+    if args.skip_volumes_older_than_x_time:
+        if args.skip_volumes_older_than_x_time.lower() == "true":
+            skip_volumes_older_than_x_time = True
+        else:
+            skip_volumes_older_than_x_time = False
+    if args.scrape_google:
         # find google provider in providers list
-        if args["scrape_google"].lower() == "true":
+        if args.scrape_google.lower() == "true":
             for provider in providers:
                 if provider.name == "google-books":
                     provider.enabled = True
                     break
-        elif args["scrape_google"].lower() == "false":
+        elif args.scrape_google.lower() == "false":
             for provider in providers:
                 if provider.name == "google-books":
                     provider.enabled = False
                     break
-    if args["scrape_bookwalker"]:
+    if args.scrape_bookwalker:
         # find bookwalker provider in providers list
-        if args["scrape_bookwalker"].lower() == "true":
+        if args.scrape_bookwalker.lower() == "true":
             for provider in providers:
                 if provider.name == "bookwalker":
                     provider.enabled = True
                     break
-        elif args["scrape_bookwalker"].lower() == "false":
+        elif args.scrape_bookwalker.lower() == "false":
             for provider in providers:
                 if provider.name == "bookwalker":
                     provider.enabled = False
                     break
-    if args["scrape_kobo"]:
+    if args.scrape_kobo:
         # find kobo provider in providers list
-        if args["scrape_kobo"].lower() == "true":
+        if args.scrape_kobo.lower() == "true":
             for provider in providers:
                 if provider.name == "kobo":
                     provider.enabled = True
                     break
-        elif args["scrape_kobo"].lower() == "false":
+        elif args.scrape_kobo.lower() == "false":
             for provider in providers:
                 if provider.name == "kobo":
                     provider.enabled = False
                     break
-    if args["scrape_barnes_and_noble"]:
+    if args.scrape_barnes_and_noble:
         # find barnes and noble provider in providers list
-        if args["scrape_barnes_and_noble"].lower() == "true":
+        if args.scrape_barnes_and_noble.lower() == "true":
             for provider in providers:
                 if provider.name == "barnes_and_noble":
                     provider.enabled = True
                     break
-        elif args["scrape_barnes_and_noble"].lower() == "false":
+        elif args.scrape_barnes_and_noble.lower() == "false":
             for provider in providers:
                 if provider.name == "barnes_and_noble":
                     provider.enabled = False
                     break
-    if args["scrape_comic_vine"]:
+    if args.scrape_comic_vine:
         # find comic vine provider in providers list
-        if args["scrape_comic_vine"].lower() == "true":
+        if args.scrape_comic_vine.lower() == "true":
             for provider in providers:
                 if provider.name == "comic_vine":
                     provider.enabled = True
                     break
-        elif args["scrape_comic_vine"].lower() == "false":
+        elif args.scrape_comic_vine.lower() == "false":
             for provider in providers:
                 if provider.name == "comic_vine":
                     provider.enabled = False
                     break
-
-    user_path = args.get("path", None)
-    user_file = args.get("file", None)
-    sort = args.get("sort", False)
-
+    if args.skip_volume_if_already_has_anilist_id:
+        if args.skip_volume_if_already_has_anilist_id.lower() == "true":
+            skip_volume_if_already_has_anilist_id = True
+        elif args.skip_volume_if_already_has_anilist_id.lower() == "false":
+            skip_volume_if_already_has_anilist_id = False
+        else:
+            skip_volume_if_already_has_anilist_id = False
+    if args.skip_google_metadata:
+        if args.skip_google_metadata.lower() == "true":
+            skip_google_metadata = True
+        elif args.skip_google_metadata.lower() == "false":
+            skip_google_metadata = False
+        else:
+            skip_google_metadata = False
+    if args.use_internal_cover:
+        if args.use_internal_cover.lower() == "true":
+            use_internal_cover = True
+        elif args.use_internal_cover.lower() == "false":
+            use_internal_cover = False
+    if args.skip_volume_one:
+        if args.skip_volume_one.lower() == "true":
+            skip_volume_one = True
+        elif args.skip_volume_one.lower() == "false":
+            skip_volume_one = False
+    if args.skip_web_link:
+        if args.skip_web_link.lower() == "true":
+            skip_web_link = True
+        elif args.skip_web_link.lower() == "false":
+            skip_web_link = False
+    if args.only_update_if_new_title:
+        if args.only_update_if_new_title.lower() == "true":
+            only_update_if_new_title = True
+        elif args.only_update_if_new_title.lower() == "false":
+            only_update_if_new_title = False
     stop = False
-
-    if user_path or user_file:
-        # user_file = "/mnt/drive_three/manga/public/A Bride's Story/A Bride's Story v10 (2018) (Yen Press) (Digital) (danke-Empire).cbz"
-        if user_file:
-            user_path = os.path.dirname(user_file)
-        if os.path.exists(user_path):
-            # user_path = "/mnt/drive_three/novels/public/The Fruit of Evolution - Before I Knew It, My Life Had It Made!"
-            os.chdir(user_path)
-            for root, dirs, files in scandir.walk(user_path, topdown=True):
-                if skip_letters and root == user_path:
+    if args.path or args.file:
+        # args.file = "/mnt/drive_three/manga/public/A Bride's Story/A Bride's Story v10 (2018) (Yen Press) (Digital) (danke-Empire).cbz"
+        if args.file:
+            args.path = os.path.dirname(args.file)
+        if os.path.exists(args.path):
+            # args.path = "/mnt/drive_three/novels/public/The Fruit of Evolution - Before I Knew It, My Life Had It Made!"
+            os.chdir(args.path)
+            for root, dirs, files in scandir.walk(args.path, topdown=True):
+                if skip_letters and root == args.path:
                     dirs[:] = [
                         d
                         for d in dirs
                         if re.search(accepted_letters, d[0].capitalize(), re.IGNORECASE)
                     ]
-                if user_file:
-                    files = [os.path.basename(user_file)]
-                if sort and sort.lower() == "true":
+                if args.file:
+                    files = [os.path.basename(args.file)]
+                if args.sort and args.sort.lower() == "true":
                     dirs.sort()
                     files.sort()
                 remove_ignored_folders(dirs)
@@ -8275,7 +8295,7 @@ if __name__ == "__main__":
                             max_workers=2
                         ) as executer:
                             result = executer.map(process_file, files)
-                        if user_file:
+                        if args.file:
                             stop = True
                     else:
                         for file in files:
@@ -8373,12 +8393,12 @@ if __name__ == "__main__":
                                 + "\n--------------------------------------------------------------------------------"
                             )
                             process_result = process_file(file, files)
-                            if user_file:
+                            if args.file:
                                 stop = True
                                 break
                 elif stop:
                     break
         else:
-            send_error_message("Directory does not exist: " + user_path)
+            send_error_message("Directory does not exist: " + args.path)
     else:
         send_error_message("No image path or zip file provided")
