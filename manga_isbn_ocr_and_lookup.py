@@ -54,16 +54,14 @@ script_version = "1.1.18"
 
 # ======= REQUIRED SINGLE INSTALLS =======
 # 1. WGET Install: sudo apt-get install wget
-# 2. Calibre Install: sudo apt-get install calibre && sudo apt-get install libopengl0 && sudo apt-get install libegl1 && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
-# 3. Misc (required for requirements & comictagger to install successfully): sudo apt-get install libicu-dev && sudo apt-get install pkg-config
+# 2. Calibre Install: sudo apt-get install xdg-utils && sudo apt-get install xz-utils && sudo apt-get install libopengl0 && sudo apt-get install libegl1 && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+# 3. Misc (required for requirements & comictagger to install successfully): sudo apt-get install libicu-dev && sudo apt-get install pkg-config && sudo apt-get install python3-icu
 # 4. Comictagger Install: sudo pip3 install comictagger
 # 5. Chrome Install: wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && rm google-chrome-stable_current_amd64.deb
 # 6. PyQT5 Install: sudo apt-get install python3-pyqt5
 # 7. Tesseract Install: sudo apt-get install tesseract-ocr
 # 8. Requirements Install: pip3 install -r /data/docker/scripts/manga_isbn_ocr_and_lookup/requirements.txt
-
-# ======= Unknown (unsure if needed) =======
-# sudo apt-get install python3-icu
+# 9. Anilist Install: pip3 install /scripts/manga_isbn_ocr_and_lookup/python-anilist-1.0.9/.
 
 # downoads required items for nltk.tokenize
 nltk.download("punkt")
@@ -100,7 +98,13 @@ chapter_searches = [
     r"^((#)?([0-9]+)(([-_.])([0-9]+)|)+(x[0-9]+)?(#([0-9]+)(([-_.])([0-9]+)|)+)?)$",
 ]
 
-subtitle_exclusion_keywords = ["vol(ume)?", "(chap(ters?)?|ch(ap)?\.)", "edition"]
+subtitle_exclusion_keywords = [
+    r"\b(vol(ume)?s?)\b",
+    r"\b(?=.*(?:chap(?:ters?)?|ch(?:ap)?\.))(?=.*\d).*",
+    r"\bedition\b",
+    r"\bCollection\b",
+    r"^\d+(\.\d+)?$",
+]
 
 # join with | to create a regex
 subtitle_exclusion_keywords_regex = "|".join(subtitle_exclusion_keywords)
@@ -262,6 +266,16 @@ def image_arg_parser():
         help="If enabled, the program will only update the title if it is different.",
         required=False,
     )
+    parser.add_argument(
+        "--skip_to_file",
+        help="If enabled, the program will skip every file until it gets to the passed in one.",
+        required=False,
+    )
+    parser.add_argument(
+        "--skip_to_directory",
+        help="If enabled, the program will skip every directory until it gets to the passed in one.",
+        required=False,
+    )
     return parser
 
 
@@ -378,7 +392,7 @@ providers = [
         "bookwalker",
         True,
         2,
-        "https://upload.wikimedia.org/wikipedia/commons/9/9c/BOOK☆WALKER_logo.svg",
+        "https://play-lh.googleusercontent.com/a7jUyjTxWrl_Kl1FkUSv2FHsSu3Swucpem2UIFDRbA1fmt5ywKBf-gcwe6_zalOqIR7V=w240-h480-rw",
     ),
     Provider(
         "kobo",
@@ -552,24 +566,13 @@ def execute_command(command):
 
 
 # prints our ocr extracted texts
-def print_extracted_texts(extracted_texts, seperated=False):
-    if seperated:
-        print(
-            "\n--------------------------------[Extracted Texts]--------------------------------"
-        )
+def print_extracted_texts(extracted_texts, separated=False):
+    print(f"\n{'-'*80}\n{'Extracted Texts':^80}\n{'-'*80}")
+    if separated:
         for text in extracted_texts:
-            print(text)
-        print(
-            "--------------------------------------------------------------------------------"
-        )
+            print(f"{text}\n{'-'*80}")
     else:
-        print(
-            "\n--------------------------------[Extracted Texts]--------------------------------"
-        )
-        print(extracted_texts)
-        print(
-            "--------------------------------------------------------------------------------"
-        )
+        print(f"{extracted_texts}\n{'-'*80}")
 
 
 # Removes tuples from results
@@ -654,10 +657,10 @@ def print_book_result(result, anilist=False):
 
         # If there is book information
         if book:
-            print(
-                "\n--------------------------------[Book Information]------------------------------"
-            )
-
+            if not anilist:
+                print("\n" + "-"*30 + "[Book Information]" + "-"*30)
+            else:
+                print("\n" + "-"*30 + "[AniList Information]" + "-"*30)
             # Get a list of all non-callable and non-system attributes from the book object
             attributes = [
                 attr
@@ -7313,7 +7316,7 @@ def search_provider(
                         if data_result and data_result not in bookwalker_results:
                             bookwalker_results.append(data_result)
                         print(
-                            "\n\t\tSleeping for "
+                            "\n\t\t\tSleeping for "
                             + str(web_scrape_sleep_time)
                             + " seconds...\n"
                         )
@@ -8280,6 +8283,10 @@ if __name__ == "__main__":
             only_update_if_new_title = True
         elif args.only_update_if_new_title.lower() == "false":
             only_update_if_new_title = False
+    if args.skip_to_file:
+        skip_to_file = str(args.skip_to_file).strip()
+    if args.skip_to_directory:
+        skip_to_directory = str(args.skip_to_directory).strip()
     stop = False
     if args.path or args.file:
         # args.file = "/mnt/drive_three/manga/public/A Bride's Story/A Bride's Story v10 (2018) (Yen Press) (Digital) (danke-Empire).cbz"
@@ -8289,6 +8296,11 @@ if __name__ == "__main__":
             # args.path = "/mnt/drive_three/novels/public/The Fruit of Evolution - Before I Knew It, My Life Had It Made!"
             os.chdir(args.path)
             for root, dirs, files in scandir.walk(args.path, topdown=True):
+                if skip_to_directory:
+                    if skip_to_directory != os.path.basename(root):
+                        continue
+                    else:
+                        skip_to_directory = None
                 if skip_letters and root == args.path:
                     dirs[:] = [
                         d
@@ -8318,6 +8330,11 @@ if __name__ == "__main__":
                             stop = True
                     else:
                         for file in files:
+                            if skip_to_file:
+                                if file != skip_to_file:
+                                    continue
+                                else:
+                                    skip_to_file = None
                             file_type = None
                             extension = get_file_extension(file)
                             if contains_chapter_keywords(
