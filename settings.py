@@ -65,7 +65,7 @@ scrape_bookwalker = True
 scrape_barnes_and_noble = True
 
 # Scrape Comic Vine
-scrape_comic_vine = True
+scrape_comic_vine = False
 
 # Comic Vine API Key
 comic_vine_api_key = ""
@@ -74,7 +74,7 @@ comic_vine_api_key = ""
 skip_non_volume_ones = False
 
 # Amount of time to sleep when the API hits the rate limit in seconds
-sleep_time = 35
+sleep_time = 10
 
 # Amount of time to sleep when a limit is hit when web scraping
 web_scrape_sleep_time = 5
@@ -86,15 +86,7 @@ comic_vine_sleep_time = 36
 isbn_13_regex = "(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})"
 
 # Ignored folder names
-ignored_folder_names = [
-    "test",
-    "Test",
-    "Fairy Tail",
-    "Gintama",
-    "Can Someone Please Explain What's Going On",
-    "Future Diary",
-    "The Seven Deadly Sins",
-]
+ignored_folder_names = []
 
 # Total CBZ/EPUB files encountered
 total_files = 0
@@ -195,3 +187,9 @@ skip_web_link = False
 
 # Only update if new title
 only_update_if_new_title = False
+
+# Will skip every file until it gets to the passed in one.
+skip_to_file = ""
+
+# Will skip every directory until it gets to the passed in one.
+skip_to_directory = ""
