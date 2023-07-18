@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import date
 from difflib import SequenceMatcher
-from functools import partial
+from functools import lru_cache, partial
 from math import log10, sqrt
 from urllib.parse import urlparse
 
@@ -50,7 +50,7 @@ from titlecase import titlecase
 from unidecode import unidecode
 from webdriver_manager.chrome import ChromeDriverManager
 
-script_version = "1.1.18"
+script_version = "1.1.21"
 
 # ======= REQUIRED SINGLE INSTALLS =======
 # 1. WGET Install: sudo apt-get install wget
@@ -68,6 +68,11 @@ nltk.download("punkt")
 
 # The root direcotry for saving of images
 ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+
+# Check if the instance is running in docker.
+# If the ROOT_DIR is /app/logs, then it's running in docker.
+if ROOT_DIR == "/app/addons/manga_isbn/logs":
+    script_version += "-docker"
 
 # Accepted internal zip image extensions
 image_extensions = ["jpg", "jpeg", "png", "tbn", "jxl"]
@@ -658,9 +663,9 @@ def print_book_result(result, anilist=False):
         # If there is book information
         if book:
             if not anilist:
-                print("\n" + "-"*30 + "[Book Information]" + "-"*30)
+                print("\n" + "-" * 30 + "[Book Information]" + "-" * 30)
             else:
-                print("\n" + "-"*30 + "[AniList Information]" + "-"*30)
+                print("\n" + "-" * 30 + "[AniList Information]" + "-" * 30)
             # Get a list of all non-callable and non-system attributes from the book object
             attributes = [
                 attr
@@ -825,9 +830,7 @@ def print_book_result(result, anilist=False):
                 ],
             )
 
-        print(
-            "--------------------------------------------------------------------------------\n"
-        )
+        print("-" * 80)
 
         # If extracted_texts attribute is available and not empty, print the extracted texts
         if (
@@ -1383,6 +1386,7 @@ def google_api_isbn_lookup(
     extension = get_file_extension(original_file_name)
     file_dir_files = []
     series_id_order_number = ""
+    short_series_book_title = ""
     try:
         base_api_link = ""
         text = ""
@@ -1506,12 +1510,15 @@ def google_api_isbn_lookup(
                     id = ""
                     if "id" in item:
                         id = item["id"]
+                        if id == "Xd-YEAAAQBAJ":
+                            pass
                     volume_info = item["volumeInfo"]
-                    if "subtitle" in item["volumeInfo"]:
-                        subtitle = item["volumeInfo"]["subtitle"]
-                        subtitle = unidecode(subtitle)
                     if "seriesInfo" in volume_info:
                         series_info = volume_info["seriesInfo"]
+                        # if "shortSeriesBookTitle" in series_info:
+                        #     short_series_book_title = series_info[
+                        #         "shortSeriesBookTitle"
+                        #     ]
                         if "volumeSeries" in series_info:
                             volume_series = series_info["volumeSeries"]
                             if len(volume_series) > 0:
@@ -1536,6 +1543,29 @@ def google_api_isbn_lookup(
                             series_id = ""
                     else:
                         series_id = ""
+                    if "subtitle" in item["volumeInfo"]:
+                        subtitle = item["volumeInfo"]["subtitle"]
+                        subtitle = unidecode(subtitle)
+                        if re.search(
+                            r"^(%s)(\s+)?(\.)?(\s+)?([0-9]+)(([-_.])([0-9]+)|)+((\s+(-)|:)\s+)"
+                            % volume_regex_keywords,
+                            subtitle.strip(),
+                            re.IGNORECASE,
+                        ):
+                            subtitle = re.sub(
+                                r"^(%s)(\s+)?(\.)?(\s+)?([0-9]+)(([-_.])([0-9]+)|)+((\s+(-)|:)\s+)"
+                                % volume_regex_keywords,
+                                "",
+                                subtitle.strip(),
+                                re.IGNORECASE,
+                            ).strip()
+                        # Check that it isn't in the short series book title.
+                        # if short_series_book_title:
+                        #     if (
+                        #         subtitle.lower()
+                        #         in unidecode(short_series_book_title).lower()
+                        #     ):
+                        #         subtitle = ""
                     if "maturityRating" in volume_info:
                         maturity_rating = volume_info["maturityRating"]
                     else:
@@ -1658,8 +1688,8 @@ def google_api_isbn_lookup(
                                 descriptions = []
                                 if os.path.isdir(file_dir):
                                     file_dir_files = os.listdir(file_dir)
-                                    file_dir_files = remove_hidden_files(files)
-                                    file_dir_files = remove_non_cbz_epub(files)
+                                    file_dir_files = remove_hidden_files(file_dir_files)
+                                    file_dir_files = remove_non_cbz_epub(file_dir_files)
                                     file_dir_files = [
                                         os.path.join(file_dir, file)
                                         for file in file_dir_files
@@ -1703,7 +1733,6 @@ def google_api_isbn_lookup(
                                             without_date=True,
                                         )
                                     title = titlecase(search)
-                                    subtitle = ""
                                     if manual_title_approval and not skip_title_check:
                                         print(
                                             "\n--------------------------------Title Extraction Check--------------------------------"
@@ -2401,6 +2430,8 @@ def check_for_author_upgrade(writers_from_epub, writers_from_api):
 
 
 def check_for_published_date_upgrade(published_date_from_epub, published_date_from_api):
+    if len(published_date_from_api) == 4 and len(published_date_from_epub) > 4:
+        return False
     if not re.search(r"\d", published_date_from_epub):
         published_date_from_epub = ""
     if published_date_from_epub and published_date_from_api:
@@ -3444,6 +3475,10 @@ def compare_metadata(book, epub_path, files):
                 )
         if book.isbn:
             zip_comments_to_be_written.append("isbn:" + str(book.isbn))
+
+        if book.google_volume_id:
+            zip_comments_to_be_written.append("volume_id:" + str(book.google_volume_id))
+
         if extension == "cbz":
             author_upgrade_result = check_for_author_upgrade(data.credits, book.writer)
             if author_upgrade_result:
@@ -3633,8 +3668,10 @@ def compare_metadata(book, epub_path, files):
             elif extension == "cbz":
                 cbz_changes.append("critical_rating=" + str(float(book.average_rating)))
                 data_comparison.append(data.average_rating)
+
         if book.series_id:
             zip_comments_to_be_written.append(book.series_id)
+
         if anilist_metadata:
             if anilist_metadata.id:
                 zip_comments_to_be_written.append(
@@ -3729,7 +3766,7 @@ def compare_metadata(book, epub_path, files):
                     "\tUpdating Zip Comment: \n"
                     + "\t\tFrom: "
                     + str(data.zip_comment)
-                    + " \n\t\tTo: "
+                    + " \n\t\tTo:    "
                     + str(combined)
                 )
                 if manualmetadata and 1 != 1:
@@ -4957,6 +4994,7 @@ def scrape_url(url, strainer=None, headers=None, cookies=None, proxy=None):
 
 
 # Retrieves the ids from the soup passed, and returns them.
+@lru_cache(maxsize=None)
 def scrape_series_ids(id, sort=False):
     url = "https://play.google.com/store/books/series?id=" + id
     search_results = []
@@ -4964,15 +5002,19 @@ def scrape_series_ids(id, sort=False):
         url,
         [
             "--disable-blink-features=AutomationControlled",
-            "window-size=1920,1080",
+            "--window-size=7680,4320",
+            # "--window-size=1920,1080",
+            "--start-maximized",
             "--headless",
             "--disable-gpu",
             "--no-sandbox",
             "--disable-dev-shm-usage",
         ],
     )
+
     # find all buttons on page with an attribute of aria-label that equals "Scroll Next"
     buttons = driver.find_elements(By.XPATH, '//button[@aria-label="Scroll Next"]')
+    time.sleep(5)  # gives the page time to load everything in
     if buttons:
         if len(buttons) > 1:
             forward_volumes = buttons[1]
@@ -4985,7 +5027,7 @@ def scrape_series_ids(id, sort=False):
             try:
                 driver.execute_script("arguments[0].click();", forward_volumes)
                 # update source
-                time.sleep(1)
+                time.sleep(2)
             except Exception as e:
                 break
             else:
@@ -5029,6 +5071,7 @@ def get_series_ids(soup, sort=False):
                 for href in hrefs
                 if re.search(r"/store/books/details", href["href"])
             ]
+            # print(str(len(filtered_hrefs)))
             cleaned_hrefs = []
             for item in filtered_hrefs:
                 href = item["href"]
@@ -6953,6 +6996,44 @@ def search_provider(
                             + "\n\t\tmay take awhile depending on the number of ids..."
                         )
                         series_info = scrape_series_ids(dir_file_series_ids)
+                        if (
+                            user_mode == "path"
+                            and series_info
+                            and dir_files
+                            and len(series_info) != len(dir_files)
+                        ):
+                            print("\n\tdir_files: " + str(len(dir_files)))
+                            print("\tseries_volumes: " + str(len(series_info)))
+                            if len(series_info) > len(dir_files):
+                                # inform the user that there are new volumes in the series
+                                send_change_message(
+                                    "\n\tNew volumes found for series_id: "
+                                    + str(dir_file_series_ids)
+                                    + " ("
+                                    + str(len(series_info))
+                                    + " ids found)"
+                                )
+                                send_change_message(
+                                    "\t\t"
+                                    + "https://play.google.com/store/books/series?id="
+                                    + str(dir_file_series_ids)
+                                )
+                            else:
+                                # let the user know there's a mismatch in the number of files and the number of ids found
+                                # also send the full link with the message
+                                send_error_message(
+                                    "\n\tMore volumes in local library than online, with series_id: "
+                                    + str(dir_file_series_ids)
+                                    + " ("
+                                    + str(len(series_info))
+                                    + " ids found)"
+                                )
+                                send_error_message(
+                                    "\t\t"
+                                    + "https://play.google.com/store/books/series?id="
+                                    + str(dir_file_series_ids)
+                                )
+                            pass
                         if series_info:
                             print("\t\t\tFound " + str(len(series_info)) + " ids:")
                             for item in series_info:
@@ -8137,6 +8218,9 @@ def has_multiple_numbers(file_name):
 
 
 if __name__ == "__main__":
+    # The mode that the user passed in, either a path or a file
+    user_mode = "path"
+
     parser = image_arg_parser()
     args = parser.parse_args()
     if args.webhook is not None:
@@ -8291,8 +8375,9 @@ if __name__ == "__main__":
     if args.path or args.file:
         # args.file = "/mnt/drive_three/manga/public/A Bride's Story/A Bride's Story v10 (2018) (Yen Press) (Digital) (danke-Empire).cbz"
         if args.file:
+            user_mode = "file"
             args.path = os.path.dirname(args.file)
-        if os.path.exists(args.path):
+        if os.path.isdir(args.path):
             # args.path = "/mnt/drive_three/novels/public/The Fruit of Evolution - Before I Knew It, My Life Had It Made!"
             os.chdir(args.path)
             for root, dirs, files in scandir.walk(args.path, topdown=True):
@@ -8348,86 +8433,69 @@ if __name__ == "__main__":
                             if not chapter_support_toggle and file_type == "chapter":
                                 continue
                             if file_type == "chapter" and extension == "cbz":
-                                print(
-                                    "\n--------------------------------------------------------------------------------\n"
-                                    + "File: "
-                                    + os.path.basename(file)
-                                    + "\n--------------------------------------------------------------------------------"
-                                )
+                                file_path = os.path.join(root, file)
+
+                                print("\n" + "-" * 80)
+                                print("File:", os.path.basename(file_path))
+                                print("-" * 80)
+
+                                if skip_comic_info:
+                                    comic_info_contents = get_comic_info_xml(file_path)
+                                    if comic_info_contents:
+                                        print("\tComicInfo.xml found, skipping...")
+                                        continue
+
                                 chapter_number = remove_everything_but_volume_num(
-                                    [file], chapter=True
+                                    [file_path], chapter=True
                                 )
-                                if chapter_number != "":
-                                    converted_number = set_num_as_float_or_int(
-                                        chapter_number
-                                    )
-                                    part = get_file_part(file, chapter=True)
-                                    if part:
-                                        part = set_num_as_float_or_int(part)
-                                    title = None
-                                    if converted_number != "" and not part:
-                                        if (
-                                            isinstance(converted_number, float)
-                                            or isinstance(converted_number, int)
-                                            or isinstance(converted_number, str)
-                                        ):
-                                            title = "Chapter " + str(converted_number)
-                                        elif isinstance(converted_number, list):
-                                            lowest = min(converted_number)
-                                            highest = max(converted_number)
-                                            if lowest != highest:
-                                                title = (
-                                                    "Chapters "
-                                                    + str(lowest)
-                                                    + "-"
-                                                    + str(highest)
-                                                )
-                                            else:
-                                                title = "Chapter " + str(lowest)
-                                    elif converted_number != "" and part:
-                                        if (
-                                            isinstance(converted_number, float)
-                                            or isinstance(converted_number, int)
-                                            or isinstance(converted_number, str)
-                                        ) and (
-                                            isinstance(part, float)
-                                            or isinstance(part, int)
-                                            or isinstance(part, str)
-                                        ):
-                                            title = (
-                                                "Chapter "
-                                                + str(converted_number)
-                                                + " Part "
-                                                + str(part)
-                                            )
+                                converted_number = set_num_as_float_or_int(
+                                    chapter_number
+                                )
+                                part = get_file_part(file_path, chapter=True)
+                                title = None
+
+                                if converted_number != "":
+                                    if isinstance(converted_number, list):
+                                        lowest = min(converted_number)
+                                        highest = max(converted_number)
+                                        if lowest != highest:
+                                            title = f"Chapters {lowest}-{highest}"
+                                        else:
+                                            title = f"Chapter {lowest}"
+                                    elif part:
+                                        if isinstance(
+                                            converted_number, (float, int, str)
+                                        ) and isinstance(part, (float, int, str)):
+                                            title = f"Chapter {converted_number} Part {part}"
+                                    elif isinstance(
+                                        converted_number, (float, int, str)
+                                    ):
+                                        title = f"Chapter {converted_number}"
+
                                     if title:
-                                        data = get_cbz_metadata(
-                                            os.path.join(root, file)
-                                        )
-                                        if data:
-                                            if data.title != title:
-                                                update_metadata(
-                                                    "comictagger",
-                                                    os.path.join(root, file),
-                                                    [data.title],
-                                                    [
-                                                        "title="
-                                                        + re.sub(
-                                                            r"([,=])", r"^\1", title
-                                                        )
-                                                    ],
-                                                    "CBZ Archive",
-                                                    "-s -t cr -m",
-                                                    skip_print=True,
-                                                    cbz=True,
-                                                )
+                                        print(f"Title: {title}")
+                                        data = get_cbz_metadata(file_path)
+                                        if data and data.title != title:
+                                            print(f"Data Title: {data.title}")
+                                            formatted_title = re.sub(
+                                                r"([,=])", r"^\1", title
+                                            )
+                                            update_metadata(
+                                                "comictagger",
+                                                file_path,
+                                                [data.title],
+                                                ["title=" + formatted_title],
+                                                "CBZ Archive",
+                                                "-s -t cr -m",
+                                                skip_print=True,
+                                                cbz=True,
+                                            )
                                 continue
-                            print(
-                                "\n--------------------------------------------------------------------------------\n"
-                                + "File: "
-                                + os.path.basename(file)
-                                + "\n--------------------------------------------------------------------------------"
-                            )
+
+                            print("\n" + "-" * 80)
+                            print("File:", os.path.basename(file))
+                            print("-" * 80)
+
                             process_result = process_file(file, files)
                             if args.file:
                                 stop = True
