@@ -40,7 +40,7 @@ from lxml import etree
 from nltk.tokenize import sent_tokenize
 from PIL import Image
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
 from settings import *
 from simyan.comicvine import Comicvine, ComicvineResource
@@ -60,8 +60,8 @@ script_version = "1.1.21"
 # 5. Chrome Install: wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt install ./google-chrome-stable_current_amd64.deb && rm google-chrome-stable_current_amd64.deb
 # 6. PyQT5 Install: sudo apt-get install python3-pyqt5
 # 7. Tesseract Install: sudo apt-get install tesseract-ocr
-# 8. Requirements Install: pip3 install -r /data/docker/scripts/manga_isbn_ocr_and_lookup/requirements.txt
-# 9. Anilist Install: pip3 install /scripts/manga_isbn_ocr_and_lookup/python-anilist-1.0.9/.
+# 8. Requirements Install: pip3 install -r /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/requirements.txt
+# 9. Anilist Install: pip3 install /scripts/komga-cover-extractor/addons/manga_isbn/python-anilist-1.0.9/.
 
 # downoads required items for nltk.tokenize
 nltk.download("punkt")
@@ -5003,7 +5003,6 @@ def scrape_series_ids(id, sort=False):
         [
             "--disable-blink-features=AutomationControlled",
             "--window-size=7680,4320",
-            # "--window-size=1920,1080",
             "--start-maximized",
             "--headless",
             "--disable-gpu",
@@ -5106,16 +5105,19 @@ def get_series_ids(soup, sort=False):
 
 
 # Gets the user a webdriver object based on the url passed in
-def get_page_driver(url, options=None):
+def get_page_driver(url, options=[]):
+    chrome_options = webdriver.ChromeOptions()
     if options:
-        options_driver = webdriver.ChromeOptions()
         for option in options:
-            options_driver.add_argument(option)
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=options_driver
-        )
-    else:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+            chrome_options.add_argument(option)
+    driver = webdriver.Chrome(
+        service=ChromeService(
+            ChromeDriverManager(
+                version="114.0.5735.90",
+            ).install()
+        ),
+        options=chrome_options,
+    )
     driver.get(url)
     return driver
 
