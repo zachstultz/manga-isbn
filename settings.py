@@ -1,8 +1,19 @@
+accepted_file_types = []
+
 # Manual title extraction approval
 manual_title_approval = False
 
 # Prompt user before metadata is written to the file
 manualmetadata = False
+
+# Prompts the user before the zip comment is written
+manual_zip_comment_approval = False
+
+# If the update itself is incredibly similar to the original
+# it will be auto-approved
+#
+# EX: Minor punctuation changes in a volume's description
+manual_meta_similarity_skip = False
 
 # Print the extracted text that the ISBN came from alongside the result
 print_extracted_texts_with_result = False
@@ -25,9 +36,6 @@ limit_google_search = False
 # Apply multi-processing when processing image links
 multi_process_image_links = False
 
-# Process multiple CBZ/EPUB files at once
-multi_process_files = False
-
 # Apply multi-processing when pulling descriptions from a file list of EPUBs
 multi_process_pulling_descriptions = True
 
@@ -38,10 +46,13 @@ multi_process_internal_files_for_isbn_search = True
 skip_letters = False
 
 # Allowed directory letters (skip directly to M-Z dirs within the root)
-accepted_letters = "[I-Z]"
+accepted_letters = ""
 
 # Skip the current file if an ISBN is found within the zip comment
 skip_file_if_isbn_in_zip_comment = False
+
+# Skip the current file if a zip comment is found
+skip_if_has_zip_comment = False
 
 # Skip files containing comic information
 skip_comic_info = False
@@ -74,7 +85,7 @@ comic_vine_api_key = ""
 skip_non_volume_ones = False
 
 # Amount of time to sleep when the API hits the rate limit in seconds
-sleep_time = 10
+sleep_time = 5
 
 # Amount of time to sleep when a limit is hit when web scraping
 web_scrape_sleep_time = 5
@@ -193,3 +204,24 @@ skip_to_file = ""
 
 # Will skip every directory until it gets to the passed in one.
 skip_to_directory = ""
+
+# Skips any cbz volume that doesn't contain a digital keyword
+skip_non_digital_manga = True
+
+# Exception keywords used when deleting chapter files with the delete_chapters_from_downloads() function.
+# Files containing a match to any exception keyword will be ignored.
+# Case is ignored when checked.
+exception_keywords = [
+    r"Extra",
+    r"One(-|)shot",
+    r"Omake",
+    r"Special",
+    r"Bonus",
+    r"Side(-|)story",
+]
+
+# Multi-process files
+multi_process_files = False
+
+# Mutes settings output
+mute_settings_output = False
