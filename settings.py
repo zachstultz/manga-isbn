@@ -76,7 +76,7 @@ scrape_bookwalker = True
 scrape_barnes_and_noble = True
 
 # Scrape Comic Vine
-scrape_comic_vine = False
+scrape_comic_vine = True
 
 # Comic Vine API Key
 comic_vine_api_key = ""
@@ -225,3 +225,6 @@ multi_process_files = False
 
 # Mutes settings output
 mute_settings_output = False
+
+# Asks the user to submit a series_id for scraping
+manual_series_id_mode = False
