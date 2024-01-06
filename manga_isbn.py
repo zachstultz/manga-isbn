@@ -52,12 +52,12 @@ from titlecase import titlecase
 from unidecode import unidecode
 from webdriver_manager.chrome import ChromeDriverManager
 
-script_version = (1, 1, 27)
+script_version = (1, 1, 30)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED SINGLE INSTALLS =======
 # 1. WGET Install: sudo apt-get install wget -y
-# 2. Calibre Install: sudo apt-get install xdg-utils -y && sudo apt-get install xz-utils -y && sudo apt-get install libopengl0 -y && sudo apt-get install libegl1 -y && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+# 2. Calibre Install: sudo apt-get install xdg-utils libxcb-cursor0 -y && sudo apt-get install xz-utils -y && sudo apt-get install libopengl0 -y && sudo apt-get install libegl1 -y && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
 # 3. Misc (required for requirements & comictagger to install successfully): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu
 # 4. Comictagger Install: sudo pip3 install comictagger
 # 5. Chrome Install: sudo apt install /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb -y
@@ -411,6 +411,11 @@ def image_arg_parser():
         help="If enabled, the program will not print the settings.",
         required=False,
     )
+    parser.add_argument(
+        "--manual_series_id_mode",
+        help="If enabled, the program will ask the user to submit a series_id for scraping.",
+        required=False,
+    )
     return parser
 
 
@@ -597,31 +602,31 @@ class ImageLinkCache:
 providers = [
     Provider(
         "google-books",
-        True,
+        scrape_google,
         1,
         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Google_%22G%22_Logo.svg/1024px-Google_%22G%22_Logo.svg.png",
     ),
     Provider(
         "kobo",
-        True,
+        scrape_kobo,
         2,
         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Rakuten_Kobo_Logo_2019.svg/1920px-Rakuten_Kobo_Logo_2019.svg.png",
     ),
     Provider(
         "barnes_and_noble",
-        True,
+        scrape_barnes_and_noble,
         3,
         "https://www.freepnglogos.com/uploads/barnes-and-noble-png-logo/dire-wolf-books-barnes-and-noble-png-logo-9.png",
     ),
     Provider(
         "bookwalker",
-        True,
+        scrape_bookwalker,
         4,
         "https://play-lh.googleusercontent.com/a7jUyjTxWrl_Kl1FkUSv2FHsSu3Swucpem2UIFDRbA1fmt5ywKBf-gcwe6_zalOqIR7V=w240-h480-rw",
     ),
     Provider(
         "comic_vine",
-        False,
+        scrape_comic_vine,
         5,
         "https://comicvine.gamespot.com/a/bundles/comicvinesite/images/logo.png",
     ),
@@ -877,17 +882,13 @@ def print_book_result(result, anilist=False):
         discord_message_fields = []
 
         # Assign the book variable based on the available attribute
-        if hasattr(result, "book"):
-            book = result.book
-        else:
-            book = result
+        book = result.book if hasattr(result, "book") else result
 
         # If there is book information
         if book:
-            if not anilist:
-                print("\n" + "-" * 30 + "[Book Information]" + "-" * 30)
-            else:
-                print("\n" + "-" * 30 + "[AniList Information]" + "-" * 30)
+            item_type = "Book" if not anilist else "AniList"
+            print(f"\n{'-'*30}[{item_type} Information]{'-'*30}")
+
             # Get a list of all non-callable and non-system attributes from the book object
             attributes = [
                 attr
@@ -909,10 +910,16 @@ def print_book_result(result, anilist=False):
                         value = book.provider.name if book.provider else "Unknown"
 
                     # Truncate value and attribute name if they exceed Discord's max lengths
-                    if len(str(value)) > 1024:
-                        value = str(value)[:1021] + "..."
-                    if len(capitalized) > 256:
-                        capitalized = capitalized[:253] + "..."
+                    value = (
+                        str(value)[:1021] + "..."
+                        if len(str(value)) > 1024
+                        else str(value)
+                    )
+                    capitalized = (
+                        capitalized[:253] + "..."
+                        if len(capitalized) > 256
+                        else capitalized
+                    )
 
                     # Print the attribute and its value
                     message = convert_to_ascii(f"\t{capitalized}: {value}")
@@ -987,16 +994,14 @@ def print_book_result(result, anilist=False):
                     }
 
                 # Set up title information for the Discord message
-                if not anilist:
-                    title_info = f"{book.series}: {book.title}"
-                else:
-                    title_info = f"{title_to_use} ({result.id})"
+                title_info = (
+                    f"{book.series}: {book.title}"
+                    if not anilist
+                    else f"{title_to_use} ({result.id})"
+                )
 
                 # Set the URL for the Discord message
-                if not anilist:
-                    link_to_use = book.api_link
-                else:
-                    link_to_use = result.url
+                link_to_use = book.api_link if not anilist else result.url
 
                 # Send the Discord message with or without local image data, as appropriate
                 if image_data_to_use:
@@ -1077,34 +1082,35 @@ def search_for_text(text, file):
     find_all_result = find_all_searches(text, file)
     if find_all_result:
         return find_all_result
-    else:
-        result = text
-        result = re.sub(r"(\/[0-9]{4}\/)", "", result, flags=re.IGNORECASE)
-        result = re.sub(
-            r"(\b([0-9]|[0-9][0-9])\.[A-Za-z]+)", "", result, flags=re.IGNORECASE
-        )
-        result = re.sub(
-            r"([A-Za-z]+([0-9]|[0-9][0-9])\.(xhtml|html|css))",
-            "",
-            result,
-            flags=re.IGNORECASE,
-        )
-        result = remove_all_alphabetical_characters(result)
-        result = re.sub(r"[^0-9\s]", "", result)
-        results = re.findall(rf"{isbn_13_regex}", result)
-        results = remove_tuples_from_results(results)
-        if results:
-            for result in results:
-                for t in result:
-                    t = re.sub(r"[^0-9]", "", t).strip()
-                    if len(t) == 13:
-                        print("\tFound ISBN: " + t)
-                        print("\t\tChecking google api result...\n")
-                        api_result = google_api_isbn_lookup(t, file)
-                        if api_result:
-                            return api_result
-            results = None
-    return results
+
+    result = text
+    result = re.sub(r"(\/[0-9]{4}\/)", "", result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"(\b([0-9]|[0-9][0-9])\.[A-Za-z]+)", "", result, flags=re.IGNORECASE
+    )
+    result = re.sub(
+        r"([A-Za-z]+([0-9]|[0-9][0-9])\.(xhtml|html|css))",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = remove_all_alphabetical_characters(result)
+    result = re.sub(r"[^0-9\s]", "", result)
+    results = re.findall(rf"{isbn_13_regex}", result)
+    results = remove_tuples_from_results(results)
+
+    if results:
+        for result in results:
+            for t in result:
+                t = re.sub(r"[^0-9]", "", t).strip()
+                if len(t) == 13:
+                    print("\tFound ISBN: " + t)
+                    print("\t\tChecking google api result...\n")
+                    api_result = google_api_isbn_lookup(t, file)
+                    if api_result:
+                        return api_result
+
+    return None
 
 
 # Searches the extracted text for the ISBN number
@@ -1997,6 +2003,7 @@ def google_api_isbn_lookup(
     number=None,
     volume_id=None,
     quoted_search=None,
+    order_by=None,
 ):
     global sleep_time
     global api_hits
@@ -2043,6 +2050,10 @@ def google_api_isbn_lookup(
                     base_api_link += "+intitle:" + str(number[0])
                 else:
                     base_api_link += "+intitle:" + str(number)
+
+            if order_by:
+                base_api_link += "&orderBy=" + order_by
+
             # prevents "The Case Files of Jeweler Richard" light novel from being found.
             # if extension == ".epub":
             #     base_api_link += "&download=epub"
@@ -3351,222 +3362,154 @@ def get_epub_metadata(epub_path):
 def clean_below_similarity_score(
     basename, array_list, volume_one_summary, require_summary_match=False
 ):
-    bases = []
-    new_results = []
-    volume_one_setences = []
+    # Initialize lists
+    bases = [remove_punctuation(basename).strip()]
+    volume_one_sentences = []
 
+    # Process volume one summary sentences
     if volume_one_summary:
-        # Tokenize volume one summary sentences
-        volume_one_setences_search = sent_tokenize(volume_one_summary.strip())
-        if volume_one_setences_search:
-            volume_one_setences = volume_one_setences_search
-        else:
-            print("\tNo sentences found in: " + volume_one_summary)
+        volume_one_sentences = [
+            sentence
+            for sentence in sent_tokenize(volume_one_summary.strip())
+            if len(sentence) >= 3
+        ]
+        if not volume_one_sentences:
+            print("\tNo valid sentences found in volume one summary.")
     else:
         print("\tNo volume one summary passed in.")
 
-    clean_base = remove_punctuation(basename).strip()
-    bases.append(clean_base)
-
     # Translate base name if required
-    if translate_titles and not clean_base.isdigit() and not require_summary_match:
+    if translate_titles and not bases[0].isdigit() and not require_summary_match:
         try:
-            clean_base_jp = ts.google(clean_base, to_language="ja")
+            clean_base_jp = ts.google(bases[0], to_language="ja")
             bases.append(clean_base_jp)
         except:
-            print("\tFailed to translate: " + clean_base)
+            print("\tFailed to translate: " + bases[0])
 
     # Sort array_list based on the presence of the English title
     if len(array_list) > 1:
-        for item in array_list[:]:
-            if hasattr(item, "title"):
-                if hasattr(item.title, "english"):
-                    if item.title.english:
-                        # remove and insert at the front of the list
-                        array_list.remove(item)
-                        array_list.insert(0, item)
+        array_list.sort(
+            key=lambda item: getattr(item.title, "english", "") or "",
+            reverse=True,
+        )
 
     # Sort array_list based on the first letter of the English title
-    first_letter_of_basename = re.search(r"^[a-zA-Z]", clean_base)
+    first_letter_of_basename = re.search(r"^[a-zA-Z]", bases[0])
     if first_letter_of_basename:
         first_letter_of_basename = first_letter_of_basename.group(0)
-        if array_list:
-            for item in array_list:
-                if hasattr(item, "title"):
-                    if hasattr(item.title, "english"):
-                        if (
-                            item.title.english
-                            and str(item.title.english[0]).lower()
-                            == str(first_letter_of_basename).lower()
-                        ):
-                            # remove and insert at the front of the list
-                            array_list.remove(item)
-                            array_list.insert(0, item)
+        array_list.sort(
+            key=lambda item: getattr(item.title, "english", "")
+            .lower()
+            .startswith(first_letter_of_basename.lower()),
+            reverse=True,
+        )
 
     # Loop through items in the array_list
     for item in array_list:
         sentences = []
+
+        # Process item description sentences
         if hasattr(item, "description") and item.description:
-            # Tokenize item description sentences
-            sentences_search = sent_tokenize(item.description.strip())
-            if sentences_search:
-                sentences = sentences_search
-            else:
-                print("\tNo sentences found in: " + item.description)
+            sentences = [
+                sentence
+                for sentence in sent_tokenize(item.description.strip())
+                if len(sentence) >= 3
+            ]
+            if not sentences:
+                print("\tNo valid sentences found in item description.")
         else:
             print("\tNo description found to split sentences from.")
 
-        comparisions = []
-        # remove any item in volume_one_sentences and sentences where length is less than 3
-        if volume_one_setences and sentences:
-            # Filter sentences with length greater than or equal to 3
-            volume_one_setences = [
-                sentence for sentence in volume_one_setences if len(sentence) >= 3
-            ]
-            sentences = [sentence for sentence in sentences if len(sentence) >= 3]
+        comparisons = []
 
-            # Remove any HTML tags from the sentences
-            sentences = [re.sub(r"<[^>]*>", "", sentence) for sentence in sentences]
+        # Remove any item in volume_one_sentences and sentences where length is less than 3
+        if volume_one_sentences and sentences:
+            sentences = [
+                re.sub(r"<[^>]*>", "", sentence).strip() for sentence in sentences
+            ]
 
             # Compare each pair of sentences from volume_one_sentences and item_sentences
-            for sentence in volume_one_setences:
+            for sentence in volume_one_sentences:
                 for compare_sentence in sentences:
-                    clean_sentence = ""
-                    clean_compare_sentence = ""
-                    if sentence and compare_sentence:
-                        clean_sentence = remove_punctuation(sentence).strip()
-                        clean_compare_sentence = remove_punctuation(
-                            compare_sentence
-                        ).strip()
-                        if clean_sentence and clean_compare_sentence:
-                            sentences_similarity_score = 0
-                            sentences_similarity_score = similar(
-                                clean_sentence,
-                                clean_compare_sentence,
-                            )
-                            if sentences_similarity_score >= sentence_similarity_score:
-                                send_change_message(
-                                    '\n\t\tSentence:\n\t\t\t"'
-                                    + sentence
-                                    + '"\n\t\t\t\tIs similar to:\n\t\t\t"'
-                                    + compare_sentence
-                                    + '"\n\t\t\t\twith a score of '
-                                    + str(sentences_similarity_score)
-                                )
-                                new_results = []
-                                new_results.append(item)
-                                return new_results
-                        else:
+                    clean_sentence = remove_punctuation(sentence).strip()
+                    clean_compare_sentence = remove_punctuation(
+                        compare_sentence
+                    ).strip()
+
+                    if clean_sentence and clean_compare_sentence:
+                        sentences_similarity_score = similar(
+                            clean_sentence, clean_compare_sentence
+                        )
+
+                        if sentences_similarity_score >= sentence_similarity_score:
                             send_change_message(
-                                clean_sentence
-                                + " or "
-                                + clean_compare_sentence
-                                + " empty after removing punctuation."
+                                f'\n\t\tSentence:\n\t\t\t"{sentence}"\n\t\t\t\tIs similar to:\n\t\t\t"{compare_sentence}"\n\t\t\t\twith a score of {sentences_similarity_score}'
                             )
+                            return [item]
 
         if not require_summary_match:
             # Process and translate titles if required
-            if hasattr(item.title, "english"):
-                compare_name_english = remove_punctuation(item.title.english).strip()
-                if compare_name_english not in comparisions:
-                    comparisions.append(compare_name_english)
-                if translate_titles and not compare_name_english.isdigit():
-                    try:
-                        compare_english_translated_japanese = ts.google(
-                            compare_name_english, to_language="ja"
-                        )
-                        if compare_english_translated_japanese not in comparisions:
-                            comparisions.append(compare_english_translated_japanese)
-                        print(
-                            "\t\tTranslated English Title to JP: "
-                            + compare_english_translated_japanese
-                        )
-                    except:
-                        print(
-                            "\tFailed to translate English Title to JP: "
-                            + compare_name_english
-                        )
-            if hasattr(item.title, "romaji"):
-                compare_name_romaji = remove_punctuation(item.title.romaji).strip()
-                if compare_name_romaji not in comparisions:
-                    comparisions.append(compare_name_romaji)
-                if translate_titles and not compare_name_romaji.isdigit():
-                    try:
-                        compare_translated_romaji = ts.google(
-                            compare_name_romaji, to_language="en"
-                        )
-                        if compare_translated_romaji not in comparisions:
-                            comparisions.append(compare_translated_romaji)
-                        print("\t\tTranslated Romaji: " + compare_translated_romaji)
-                    except Exception as e:
-                        send_error_message(e)
-                    try:
-                        translated_romaji_to_jp = ts.google(
-                            compare_name_romaji, to_language="ja"
-                        )
-                        if translated_romaji_to_jp not in comparisions:
-                            comparisions.append(translated_romaji_to_jp)
-                        print(
-                            "\t\tTranslated Romaji Title to JP: "
-                            + translated_romaji_to_jp
-                        )
-                    except Exception as e:
-                        send_error_message(e)
-            if hasattr(item.title, "native"):
-                compare_name_native = remove_punctuation(item.title.native).strip()
-                if compare_name_native not in comparisions:
-                    comparisions.append(compare_name_native)
-                if (
-                    translate_titles
-                    and not compare_name_native.isdigit()
-                    and not re.search(r"([A-Za-z])", compare_name_native)
-                ):
-                    try:
-                        compare_translated_native = ts.google(
-                            compare_name_native, to_language="en"
-                        )
-                        if compare_translated_native not in comparisions:
-                            comparisions.append(compare_translated_native)
-                        print("\t\tTranslated Native: " + compare_translated_native)
-                    except Exception as e:
-                        send_error_message(e)
+            for title_type in ["english", "romaji", "native"]:
+                if hasattr(item.title, title_type):
+                    compare_name = remove_punctuation(
+                        getattr(item.title, title_type)
+                    ).strip()
+                    if compare_name and compare_name not in comparisons:
+                        comparisons.append(compare_name)
+
+                        # Translate title if required
+                        if translate_titles and not compare_name.isdigit():
+                            try:
+                                translated_title = (
+                                    ts.google(compare_name, to_language="ja")
+                                    if title_type == "romaji"
+                                    else ts.google(compare_name, to_language="en")
+                                )
+                                if (
+                                    translated_title
+                                    and translated_title not in comparisons
+                                ):
+                                    comparisons.append(translated_title)
+                                    print(
+                                        f"\t\tTranslated {title_type.capitalize()}: {translated_title}"
+                                    )
+                            except Exception as e:
+                                send_error_message(e)
 
             # Process and translate synonyms if required
             if hasattr(item, "synonyms"):
                 for synonym in item.synonyms:
-                    if synonym not in comparisions:
-                        comparisions.append(synonym)
-                    if (
-                        translate_titles
-                        and not synonym.isdigit()
-                        and not re.search(r"([A-Za-z])", synonym)
-                    ):
-                        try:
-                            compare_translated_synonym = ts.google(
-                                synonym, to_language="en"
-                            )
-                            if compare_translated_synonym not in comparisions:
-                                comparisions.append(compare_translated_synonym)
-                        except Exception as e:
-                            send_error_message(e)
+                    compare_synonym = remove_punctuation(synonym).strip()
+                    if compare_synonym and compare_synonym not in comparisons:
+                        comparisons.append(compare_synonym)
+
+                        # Translate synonym if required
+                        if translate_titles and not compare_synonym.isdigit():
+                            try:
+                                translated_synonym = ts.google(
+                                    compare_synonym, to_language="en"
+                                )
+                                if (
+                                    translated_synonym
+                                    and translated_synonym not in comparisons
+                                ):
+                                    comparisons.append(translated_synonym)
+                            except Exception as e:
+                                send_error_message(e)
 
             # Compare base names with comparisons and check similarity score
-            match = False
             for base in bases:
-                if not match:
-                    for comparison in comparisions:
-                        similarity_score = 0
-                        similarity_score = similar(
-                            remove_punctuation(base), remove_punctuation(comparison)
-                        )
-                        if similarity_score >= required_similarity_score:
-                            new_results.append(item)
-                            match = True
-                        elif similarity_score >= 0.965:
-                            new_results.append(item)
-                            match = True
-                        break
-    return new_results
+                for comparison in comparisons:
+                    similarity_score = similar(
+                        remove_punctuation(base), remove_punctuation(comparison)
+                    )
+
+                    if (
+                        similarity_score >= required_similarity_score
+                        or similarity_score >= 0.965
+                    ):
+                        return [item]
+    return []
 
 
 class AnilistResult:
@@ -5272,7 +5215,9 @@ def clean_api_results(
                     return None
             if not skip_contains_first_word:
                 if re.search(
-                    first_word, remove_punctuation(result.series), re.IGNORECASE
+                    unidecode(first_word),
+                    remove_punctuation(unidecode(result.series)),
+                    re.IGNORECASE,
                 ):
                     print("\t\tPassed first word check")
                 else:
@@ -7218,7 +7163,7 @@ def text_search_barnes_and_noble(query):
 def search_comic_vine(query, api_key, limit=None):
     books = []
     try:
-        session = Comicvine(api_key=api_key, cache=SQLiteCache())
+        session = Comicvine(api_key=api_key, cache=None)
         results = session.search(
             resource=ComicvineResource.ISSUE, query=query, max_results=30
         )
@@ -7293,14 +7238,14 @@ def search_comic_vine(query, api_key, limit=None):
                     else:
                         print("\t\t\t - No description")
                     if hasattr(result, "image"):
-                        if hasattr(result.image, "original"):
-                            image_link = result.image.original
+                        if hasattr(result.image, "original_url"):
+                            image_link = result.image.original_url
                         else:
                             print("\t\t\t - No original image inside of image_url")
                     else:
                         print("\t\t\t - No image")
-                    if hasattr(result, "issue_id"):
-                        issue_id = result.issue_id
+                    if hasattr(result, "id"):
+                        issue_id = result.id
                         if issue_id:
                             print("\t\tIssue ID: " + str(issue_id))
                     else:
@@ -7439,10 +7384,8 @@ def search_comic_vine(query, api_key, limit=None):
                         break
                 except Exception as e:
                     send_error_message(e)
-                    if hasattr(result, "issue_id"):
-                        send_error_message(
-                            "\tComic Vine Issue ID: " + str(result.issue_id)
-                        )
+                    if hasattr(result, "id"):
+                        send_error_message("\tComic Vine Issue ID: " + str(result.id))
                     elif issue_id:
                         send_error_message("\tComic Vine Issue ID: " + str(issue_id))
                     write_to_file("comic_vine_errors.txt", str(e))
@@ -7699,6 +7642,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
     global image_link_cache
 
     session_result = []
+    series_info = []
     cover = find_cover_file(volume.path)
     internal_cover_data = None
 
@@ -7746,6 +7690,8 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
             if os.path.isfile(os.path.join(volume.root, f))
         ]
 
+        multiple_series_ids = False
+
         if series_files:
             # Clean and sort the list of files
             clean = clean_and_sort(volume.root, series_files)
@@ -7761,7 +7707,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     ):
                         print("\tFound series in cache!")
                         in_cache = True
-                        series_info = item.results
+                        series_info.extend(item.results)
                         session_result = item
                         break
 
@@ -7796,9 +7742,24 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             series_ids.append(item)
                             break
 
+                global manual_series_id_mode
+
+                if manual_series_id_mode:
+                    # ask the user for a series_id, and add it to the dir_file_series_ids list
+                    user_series_id = input(
+                        "\n\tEnter a series_id for the series: "
+                        + volume.series_name
+                        + " (leave blank to skip): "
+                    )
+                    if user_series_id:
+                        user_series_id = f"series_id:{user_series_id}"
+
+                    if user_series_id and user_series_id not in series_ids:
+                        series_ids.append(user_series_id)
+                        manual_series_id_mode = False
+
                 # remove all duplicates from dir_file_series_ids
                 dir_file_series_ids = list(set(series_ids))
-                series_info = ""
 
                 if len(dir_file_series_ids) == 1:
                     dir_file_series_ids = dir_file_series_ids[0]
@@ -7807,32 +7768,43 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         "\tSeriesIDs from zip comments is greater than 1: "
                         + str(dir_file_series_ids)
                     )
-                    dir_file_series_ids = ""
+                    multiple_series_ids = True
 
                 if dir_file_series_ids:
                     # Extract series_id from the input
-                    dir_file_series_ids = dir_file_series_ids.split("series_id:")[1]
+                    dir_file_series_ids = [
+                        x.split("series_id:")[1]
+                        for x in series_ids
+                        if x.split("series_id:")[1]
+                    ]
+                    # remove duplicates
+                    dir_file_series_ids = list(set(dir_file_series_ids))
+
                     series_id_in_cache = False
 
-                    # Check if series_id is in the cache
-                    if series_ids_cache:
-                        for item in series_ids_cache:
-                            if item.series_id == dir_file_series_ids:
-                                print("\tFound series_id in cache!")
-                                series_id_in_cache = True
-                                series_info = item.results
-                                session_result = item
-                                break
+                    for id in dir_file_series_ids:
+                        # Check if series_id is in the cache
+                        if series_ids_cache:
+                            for item in series_ids_cache:
+                                if item.series_id == dir_file_series_ids:
+                                    print("\tFound series_id in cache!")
+                                    series_id_in_cache = True
+                                    series_info.append(item.results)
+                                    session_result.append(item)
+                                    break
 
-                    # If series_id is not in cache, scrape the series info
-                    if dir_file_series_ids and not series_id_in_cache:
                         print(
-                            "\tScraping series info for: https://play.google.com/store/books/series?id="
-                            + str(dir_file_series_ids)
+                            "\n\tScraping series info for: https://play.google.com/store/books/series?id="
+                            + str(id)
                             + ")"
                             + "\n\t\tmay take awhile depending on the number of ids..."
                         )
-                        series_info = scrape_series_ids(dir_file_series_ids)
+                        series_info_scrapped = scrape_series_ids(id)
+
+                        if not series_info_scrapped:
+                            continue
+
+                        series_info.extend(series_info_scrapped)
 
                         # Check for discrepancies between local files and online series
                         if (
@@ -7844,56 +7816,66 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             print("\n\tdir_files: " + str(len(dir_files)))
                             print("\tseries_volumes: " + str(len(series_info)))
 
-                            if len(series_info) > len(dir_files):
-                                # inform the user that there are new volumes in the series
-                                message = (
-                                    "\n\tNew volumes found for series_id: "
-                                    + str(dir_file_series_ids)
-                                    + " ("
-                                    + str(len(series_info))
-                                    + " ids found)"
-                                    + "\n\t\t"
-                                    + " https://play.google.com/store/books/series?id="
-                                    + str(dir_file_series_ids)
-                                )
-                                print(message)
-                                send_discord_message(message)
-                                write_to_file("new_volumes_found.txt", message)
-                            else:
-                                # let the user know there's a mismatch in the number of files and the number of ids found
-                                # also send the full link with the message
-                                message = (
-                                    "\n\tMore volumes in local library than online, with series_id: "
-                                    + str(dir_file_series_ids)
-                                    + " ("
-                                    + str(len(series_info))
-                                    + " ids found)"
-                                    + "\n\t\t"
-                                    + " https://play.google.com/store/books/series?id="
-                                    + str(dir_file_series_ids)
-                                )
-                                print(message)
-                                send_discord_message(message)
-                                write_to_file(
-                                    "more_volumes_in_local_library.txt", message
-                                )
+                            if len(dir_file_series_ids) == 1:
+                                if len(series_info) > len(dir_files):
+                                    # inform the user that there are new volumes in the series
+                                    message = (
+                                        "\n\tNew volumes found for series_id: "
+                                        + str(dir_file_series_ids)
+                                        + " ("
+                                        + str(len(series_info))
+                                        + " ids found)"
+                                        + "\n\t\t"
+                                        + " https://play.google.com/store/books/series?id="
+                                        + str(dir_file_series_ids)
+                                    )
+                                    print(message)
+                                    send_discord_message(message)
+                                    write_to_file("new_volumes_found.txt", message)
+                                else:
+                                    # let the user know there's a mismatch in the number of files and the number of ids found
+                                    # also send the full link with the message
+                                    message = (
+                                        "\n\tMore volumes in local library than online, with series_id: "
+                                        + str(dir_file_series_ids)
+                                        + " ("
+                                        + str(len(series_info))
+                                        + " ids found)"
+                                        + "\n\t\t"
+                                        + " https://play.google.com/store/books/series?id="
+                                        + str(dir_file_series_ids)
+                                    )
+                                    print(message)
+                                    send_discord_message(message)
+                                    write_to_file(
+                                        "more_volumes_in_local_library.txt", message
+                                    )
 
                         # Display the found series info
-                        if series_info:
-                            print("\t\t\tFound " + str(len(series_info)) + " ids:")
-                            for item in series_info:
+                        if series_info_scrapped:
+                            print(
+                                "\t\t\tFound "
+                                + str(len(series_info_scrapped))
+                                + " ids:"
+                            )
+                            for item in series_info_scrapped:
                                 # print each item with [number in array] item
                                 print(
                                     "\t\t\t\t["
-                                    + str(series_info.index(item) + 1)
+                                    + str(series_info_scrapped.index(item) + 1)
                                     + "] "
                                     + item
                                 )
-                            session_result = Series_Page_Result(
-                                dir_file_series_ids, volume.series_name, series_info, []
-                            )
                         else:
                             print("\tNothing found")
+
+                    if series_info:
+                        session_result = Series_Page_Result(
+                            dir_file_series_ids,
+                            volume.series_name,
+                            series_info,
+                            [],
+                        )
         else:
             print("\tNo other files found in directory for series_id search.")
 
@@ -8000,7 +7982,8 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             for result in clean_series_search_results:
                                 cleaned_results.append(result)
                                 if (
-                                    (
+                                    not multiple_series_ids
+                                    and (
                                         result.series_id_order_number
                                         and volume.volume_number != ""
                                     )
@@ -8018,7 +8001,8 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             cleaned_results.append(result)
 
                         if (
-                            (
+                            not len(session_result.series_id) > 1
+                            and (
                                 result.series_id_order_number != ""
                                 and volume.volume_number != ""
                             )
@@ -8026,6 +8010,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             and result not in series_id_w_matching_vol_to_ord_num
                         ):
                             series_id_w_matching_vol_to_ord_num.append(result)
+
             series_id_matching_vol_results = []
 
             if series_id_w_matching_vol_to_ord_num:
@@ -8185,7 +8170,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     0,
                     volume.path,
                     search_three,
-                    max_results_num=30,
+                    max_results_num=30 if len(dir_files) <= 30 else 40,
                     skip_title_check=True,
                     in_line_search=False,
                     type=volume.extension,
@@ -8207,6 +8192,41 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         [
                             result
                             for result in clean_no_volume_keyword_results
+                            if result not in cleaned_results
+                        ]
+                    )
+
+                print(
+                    "\nAdditional Search without volume keyword and sorted by newest: "
+                    + search_three
+                )
+                no_volume_keyword_results_newest = google_api_isbn_lookup(
+                    0,
+                    volume.path,
+                    search_three,
+                    max_results_num=10,
+                    skip_title_check=True,
+                    in_line_search=False,
+                    type=volume.extension,
+                    order_by="newest",
+                )
+                if no_volume_keyword_results_newest:
+                    clean_no_volume_keyword_results_newest = clean_api_results(
+                        no_volume_keyword_results_newest,
+                        volume.volume_number,
+                        first_word_in_series,
+                        volume.multi_volume,
+                        volume.series_name,
+                        volume.extension,
+                        volume.volume_part,
+                        skip_series_similarity=True,
+                        skip_vol_nums_equal=True,
+                        skip_omnibus_check=True,
+                    )
+                    cleaned_results.extend(
+                        [
+                            result
+                            for result in clean_no_volume_keyword_results_newest
                             if result not in cleaned_results
                         ]
                     )
@@ -8434,7 +8454,6 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         series_similarity_score=0.8,
                     )
                     if clean_comic_vine_results:
-                        clean_comic_vine_results = clean_comic_vine_results[:5]
                         cleaned_results.extend(
                             [
                                 result
@@ -9223,14 +9242,6 @@ def parse_bool_argument(arg_value):
     return str(arg_value).lower().strip() == "true"
 
 
-# Function to set the enabled status of a provider in the providers list
-def set_provider_enabled(providers, provider_name, arg_value):
-    for provider in providers:
-        if provider.name == provider_name:
-            provider.enabled = parse_bool_argument(arg_value)
-            break
-
-
 if __name__ == "__main__":
     # The mode that the user passed in, either a path or a file
     user_mode = "path"
@@ -9344,29 +9355,27 @@ if __name__ == "__main__":
 
     # Set provider enabled status based on arguments
     if args.scrape_google:
-        set_provider_enabled(providers, "google-books", args.scrape_google)
+        scrape_google = parse_bool_argument(args.scrape_google)
     if not mute_settings_output:
         print("\tscrape_google: " + str(args.scrape_google))
 
     if args.scrape_bookwalker:
-        set_provider_enabled(providers, "bookwalker", args.scrape_bookwalker)
+        scrape_bookwalker = parse_bool_argument(args.scrape_bookwalker)
     if not mute_settings_output:
         print("\tscrape_bookwalker: " + str(args.scrape_bookwalker))
 
     if args.scrape_kobo:
-        set_provider_enabled(providers, "kobo", args.scrape_kobo)
+        scrape_kobo = parse_bool_argument(args.scrape_kobo)
     if not mute_settings_output:
         print("\tscrape_kobo: " + str(args.scrape_kobo))
 
     if args.scrape_barnes_and_noble:
-        set_provider_enabled(
-            providers, "barnes_and_noble", args.scrape_barnes_and_noble
-        )
+        scrape_barnes_and_noble = parse_bool_argument(args.scrape_barnes_and_noble)
     if not mute_settings_output:
         print("\tscrape_barnes_and_noble: " + str(args.scrape_barnes_and_noble))
 
     if args.scrape_comic_vine:
-        set_provider_enabled(providers, "comic_vine", args.scrape_comic_vine)
+        scrape_comic_vine = parse_bool_argument(args.scrape_comic_vine)
     if not mute_settings_output:
         print("\tscrape_comic_vine: " + str(args.scrape_comic_vine))
 
@@ -9422,6 +9431,8 @@ if __name__ == "__main__":
         skip_non_digital_manga = parse_bool_argument(args.skip_non_digital_manga)
     if not mute_settings_output:
         print("\tskip_non_digital_manga: " + str(skip_non_digital_manga))
+    if args.manual_series_id_mode:
+        manual_series_id_mode = parse_bool_argument(args.manual_series_id_mode)
 
     if args.manual_zip_comment_approval:
         manual_zip_comment_approval = parse_bool_argument(
