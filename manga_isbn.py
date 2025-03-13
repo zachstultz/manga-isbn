@@ -47,6 +47,8 @@ from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from settings import *
 from simyan.comicvine import Comicvine, ComicvineResource
 from simyan.sqlite_cache import SQLiteCache
@@ -55,7 +57,7 @@ from titlecase import titlecase
 from unidecode import unidecode
 from webdriver_manager.chrome import ChromeDriverManager
 
-script_version = (1, 1, 38)
+script_version = (1, 1, 41)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED INSTALLS =======
@@ -71,6 +73,7 @@ script_version_text = "v{}.{}.{}".format(*script_version)
 
 # downoads required items for nltk.tokenize
 nltk.download("punkt")
+nltk.download("punkt_tab")
 
 # The script's root directory
 ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -175,6 +178,9 @@ exclusion_keywords = [
     r"(\]|\}|\)) -",
     r"\bZom(\s)",
     r"Tail -",
+    r"꞉",
+    r":",
+    # r"\d\."
 ]
 
 # Volume Regex Keywords to be used throughout the script
@@ -209,13 +215,13 @@ image_extensions_regex = "|".join(image_extensions).replace(".", "\.")
 # IMPORTANT: Any change of order or swapping of regexes, requires change in full_chapter_match_attempt_allowed alternative logic!
 chapter_searches = [
     r"\b\s-\s*(#)?(\d+)([-_.]\d+)*(x\d+)?\s*-\s",
-    r"\b(%s)(\.)?\s*(\d+)([-_.]\d+)*(x\d+)?\b(?<!\s(\d+)([-_.]\d+)*(x\d+)?\s.*)"
+    r"\b(?<![\[\(\{])(%s)(\.)?\s*(\d+)([-_.]\d+)*(x\d+)?\b(?<!\s(\d+)([-_.]\d+)*(x\d+)?\s.*)"
     % chapter_regex_keywords,
-    r"(?<![A-Za-z]|%s)(((%s)([-_. ]+)?(\d+)([-_.]\d+)*(x\d+)?)|\s+(\d+)(\.\d+)?(x\d+((\.\d+)+)?)?(\s+|#\d+|%s))"
+    r"(?<![A-Za-z]|%s)(?<![\[\(\{])(((%s)([-_. ]+)?(\d+)([-_.]\d+)*(x\d+)?)|\s+(\d+)(\.\d+)?(x\d+((\.\d+)+)?)?(\s+|#\d+|%s))"
     % (exclusion_keywords_joined, chapter_regex_keywords, manga_extensions_regex),
     r"((?<!^)\b(\.)?\s*(%s)(\d+)([-_.]\d+)*((x|#)(\d+)([-_.]\d+)*)*\b)((\s+-|:)\s+).*?(?=\s*[\(\[\{](\d{4}|Digital)[\)\]\}])"
     % exclusion_keywords_regex,
-    r"(\b(%s)?(\.)?\s*(%s)(\d+)([-_.]\d+)*(x\d+)?(#\d+([-_.]\d+)*)?\b)\s*((\[[^\]]*\]|\([^\)]*\)|\{[^}]*\})|((?<!\w(\s))|(?<!\w))(%s)(?!\w))"
+    r"(\b(%s)?(\.)?\s*((%s)(\d{1,2})|\d{3,})([-_.]\d+)*(x\d+)?(#\d+([-_.]\d+)*)?\b)\s*((\[[^\]]*\]|\([^\)]*\)|\{[^}]*\})|((?<!\w(\s))|(?<!\w))(%s)(?!\w))"
     % (chapter_regex_keywords, exclusion_keywords_regex, file_extensions_regex),
     r"^((#)?(\d+)([-_.]\d+)*((x|#)(\d+)([-_.]\d+)*)*)$",
 ]
@@ -1555,7 +1561,8 @@ chapter_number_search_pattern = re.compile(
 
 # Pre-compiled volume-keyword search for get_release_number()
 volume_number_search_pattern = re.compile(
-    r"\b({})((\.)|)(\s+)?([0-9]+)(([-_.])([0-9]+)|)+\b".format(volume_regex_keywords),
+    r"\b(?<![\[\(\{])(%s)((\.)|)(\s+)?([0-9]+)(([-_.])([0-9]+)|)+\b"
+    % volume_regex_keywords,
     re.IGNORECASE,
 )
 
@@ -1928,7 +1935,8 @@ def contains_chapter_keywords(file_name):
 
 
 volume_regex = re.compile(
-    r"((\s?(\s-\s|)(Part|)+({})(\.|)([-_. ]|)([0-9]+)\b)|\s?(\s-\s|)(Part|)({})(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)({})([0-9]+)\s|\s?(\s-\s|)(Part|)({})(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)({})([0-9]+)\s)".format(
+    r"((\s?(\s-\s|)(Part|)+(?<![\[\(\{])(%s)(\.|)([-_. ]|)([0-9]+)\b)|\s?(\s-\s|)(Part|)(%s)(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)(%s)([0-9]+)\s|\s?(\s-\s|)(Part|)(%s)(\.|)([-_. ]|)([0-9]+)([-_.])(\s-\s|)(Part|)(%s)([0-9]+)\s)"
+    % (
         volume_regex_keywords,
         volume_regex_keywords,
         volume_regex_keywords,
@@ -2938,7 +2946,7 @@ def process_book_match(book, zip_file, texts):
             result = Result(book, texts)
 
         message = f"\tSuccessful ISBN Match: https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-        send_message(message)
+        send_message(f"{message}\n")
         message = f"{message} for File: {os.path.basename(zip_file)}"
         successful_api_matches.append(zip_file)
         write_to_file("success_api_match.txt", message)
@@ -3753,7 +3761,7 @@ def search_anilist(basename, type_of_dir, cover_file_path, volume_one_summary):
         # Initialize variable for shortened search
         shortened_search_results = []
         search = []
-        country_regex_filter = r"(jpn?|japan|japanese)"
+        country_regex_filter = r"(jpn?|japan|japanese|kr|korea|korean)"
         additional_results = []
 
         # Get the Shortened Basename
@@ -5805,7 +5813,7 @@ def scrape_url(url, strainer=None, headers=None, cookies=None, proxy=None, timeo
 
 # Function to click the "Scroll Next" button until the end
 def click_next_buttons(driver):
-    buttons = driver.find_elements(By.XPATH, '//button[@aria-label="Scroll Next"]')
+    buttons = driver.find_elements(By.XPATH, '//button[@aria-label="Show more volumes"]')
     if not buttons:
         print("\t\t\tNo buttons, attempting to scrape IDs without clicking.")
         return False
@@ -5815,7 +5823,7 @@ def click_next_buttons(driver):
             html_before = driver.page_source
             try:
                 driver.execute_script("arguments[0].click();", button)
-                time.sleep(2)
+                time.sleep(4)
                 html_after = driver.page_source
                 if html_before == html_after:
                     break
@@ -5823,6 +5831,32 @@ def click_next_buttons(driver):
                 if i == len(buttons) - 1:
                     return False
                 break
+    return True
+
+# Function to click the "Show more volumes" button until the end
+# to load all available volumes into memory
+def click_show_more_button(driver):
+    wait = WebDriverWait(driver, 5)
+
+    while True:
+        try:
+            # Wait for the button to appear
+            button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[@aria-label="Show more volumes"]')))
+            
+            # Scroll into view (optional but helpful)
+            driver.execute_script("arguments[0].scrollIntoView(true);", button)
+            time.sleep(1)  # Allow time for scrolling
+
+            # Click the button using JavaScript to avoid issues
+            driver.execute_script("arguments[0].click();", button)
+            time.sleep(2)  # Allow time for content to load
+            
+            print("\t\t\tClicked 'Show more volumes' button.")
+
+        except Exception:
+            print("\t\t\tNo more 'Show more volumes' button found. Finished loading all items.")
+            break  # Exit loop when button is no longer found
+
     return True
 
 
@@ -5845,7 +5879,7 @@ def scrape_series_ids(id, sort=False):
     if not driver:
         return []
 
-    if click_next_buttons(driver):
+    if click_show_more_button(driver):
         print("\tScraped IDs with clicking.")
     else:
         print("\tScraped IDs without clicking.")
@@ -5904,7 +5938,8 @@ def get_series_ids(soup, sort=True):
 # Gets the user a webdriver object based on the url passed in
 def get_page_driver(url, options=[]):
     # Set the location of the chrome driver. using Service, with chrome_driver_location
-    service = ChromeService(chrome_driver_location)
+    service = ChromeService(ChromeDriverManager().install())
+    # service = ChromeService(chrome_driver_location)
 
     # Create the options object
     chrome_options = webdriver.ChromeOptions()
@@ -8299,127 +8334,130 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     )
 
                 # search one search with quotes
-                print(f"\nAdditional volume quoted search: {search}")
-                b = search_google_books(
-                    0,
-                    volume.path,
-                    search,
-                    in_line_search=False,
-                    number=volume.volume_number,
-                    quoted_search=True,
-                )
-                if b:
-                    clean_b_results = clean_api_results(
-                        b,
-                        volume.volume_number,
-                        first_word_in_series,
-                        volume.multi_volume,
-                        volume.series_name,
-                        volume.extension,
-                        volume.volume_part,
-                        skip_contains_first_word=True,
-                        skip_vol_nums_equal=True,
+                if not series_info:
+                    print(f"\nAdditional volume quoted search: {search}")
+                    b = search_google_books(
+                        0,
+                        volume.path,
+                        search,
+                        in_line_search=False,
+                        number=volume.volume_number,
+                        quoted_search=True,
                     )
-                    cleaned_results.extend(
-                        [
-                            result
-                            for result in clean_b_results
-                            if result not in cleaned_results
-                        ]
-                    )
+                    if b:
+                        clean_b_results = clean_api_results(
+                            b,
+                            volume.volume_number,
+                            first_word_in_series,
+                            volume.multi_volume,
+                            volume.series_name,
+                            volume.extension,
+                            volume.volume_part,
+                            skip_contains_first_word=True,
+                            skip_vol_nums_equal=True,
+                        )
+                        cleaned_results.extend(
+                            [
+                                result
+                                for result in clean_b_results
+                                if result not in cleaned_results
+                            ]
+                        )
 
-                # search without volume keyword
-                # print(f"\nAdditional Search without volume Keyword: {search_three}")
-                # no_volume_keyword_results = search_google_books(
-                #     0,
-                #     volume.path,
-                #     search_three,
-                #     max_results_num=30 if len(dir_files) <= 30 else 40,
-                #     in_line_search=False,
-                # )
-                # if no_volume_keyword_results:
-                #     clean_no_volume_keyword_results = clean_api_results(
-                #         no_volume_keyword_results,
-                #         volume.volume_number,
-                #         first_word_in_series,
-                #         volume.multi_volume,
-                #         volume.series_name,
-                #         volume.extension,
-                #         volume.volume_part,
-                #         skip_series_similarity=True,
-                #         skip_vol_nums_equal=True,
-                #         skip_omnibus_check=True,
-                #     )
-                #     cleaned_results.extend(
-                #         [
-                #             result
-                #             for result in clean_no_volume_keyword_results
-                #             if result not in cleaned_results
-                #         ]
-                #     )
+                    # search without volume keyword
+                    if not series_info:
+                        print(f"\nAdditional Search without volume Keyword: {search_three}")
+                        no_volume_keyword_results = search_google_books(
+                            0,
+                            volume.path,
+                            search_three,
+                            max_results_num=30 if len(dir_files) <= 30 else 40,
+                            in_line_search=False,
+                        )
+                        if no_volume_keyword_results:
+                            clean_no_volume_keyword_results = clean_api_results(
+                                no_volume_keyword_results,
+                                volume.volume_number,
+                                first_word_in_series,
+                                volume.multi_volume,
+                                volume.series_name,
+                                volume.extension,
+                                volume.volume_part,
+                                skip_series_similarity=True,
+                                skip_vol_nums_equal=True,
+                                skip_omnibus_check=True,
+                            )
+                            cleaned_results.extend(
+                                [
+                                    result
+                                    for result in clean_no_volume_keyword_results
+                                    if result not in cleaned_results
+                                ]
+                            )
 
-                print(f"\nAdditional Search without volume Keyword: {search_three}")
-                no_volume_keyword_results_newest = search_google_books(
-                    0,
-                    volume.path,
-                    search_three,
-                    max_results_num=10,
-                    in_line_search=False,
-                    order_by="newest",
-                )
-                if no_volume_keyword_results_newest:
-                    clean_no_volume_keyword_results_newest = clean_api_results(
-                        no_volume_keyword_results_newest,
-                        volume.volume_number,
-                        first_word_in_series,
-                        volume.multi_volume,
-                        volume.series_name,
-                        volume.extension,
-                        volume.volume_part,
-                        skip_series_similarity=True,
-                        skip_vol_nums_equal=True,
-                        skip_omnibus_check=True,
+                    print(f"\nAdditional Search without volume Keyword: {search_three}")
+                    no_volume_keyword_results_newest = search_google_books(
+                        0,
+                        volume.path,
+                        search_three,
+                        max_results_num=10,
+                        in_line_search=False,
+                        order_by="newest",
                     )
-                    cleaned_results.extend(
-                        [
-                            result
-                            for result in clean_no_volume_keyword_results_newest
-                            if result not in cleaned_results
-                        ]
-                    )
+                    if no_volume_keyword_results_newest:
+                        clean_no_volume_keyword_results_newest = clean_api_results(
+                            no_volume_keyword_results_newest,
+                            volume.volume_number,
+                            first_word_in_series,
+                            volume.multi_volume,
+                            volume.series_name,
+                            volume.extension,
+                            volume.volume_part,
+                            skip_series_similarity=True,
+                            skip_vol_nums_equal=True,
+                            skip_omnibus_check=True,
+                        )
+                        cleaned_results.extend(
+                            [
+                                result
+                                for result in clean_no_volume_keyword_results_newest
+                                if result not in cleaned_results
+                            ]
+                        )
 
                 # search three without volume keyword + no category check
-                # print(
-                #     f"\nAdditional Search without volume Keyword: {search_three}, with no category check."
-                # )
-                # no_volume_keyword_results_no_cat = search_google_books(
-                #     0,
-                #     volume.path,
-                #     search_three,
-                #     max_results_num=3,
-                #     in_line_search=True,
-                # )
-                # if no_volume_keyword_results_no_cat:
-                #     clean_no_volume_keyword_results_no_cat = clean_api_results(
-                #         no_volume_keyword_results,
-                #         volume.volume_number,
-                #         first_word_in_series,
-                #         volume.multi_volume,
-                #         volume.series_name,
-                #         volume.extension,
-                #         volume.volume_part,
-                #         skip_series_similarity=True,
-                #         skip_vol_nums_equal=True,
-                #         skip_categories_check=True,
-                #     )
-                #     if clean_no_volume_keyword_results_no_cat:
-                #         cleaned_results.extend(
-                #             [
-                #                 result
-                #                 for result in clean_no_volume_keyword_results_no_cat
-                #                 if result not in cleaned_results
-                #             ]
-                #         )
+                if not series_info:
+                    print(
+                        f"\nAdditional Search without volume Keyword: {search_three}, with no category check."
+                    )
+                    no_volume_keyword_results_no_cat = search_google_books(
+                        0,
+                        volume.path,
+                        search_three,
+                        max_results_num=3,
+                        in_line_search=True,
+                    )
+                    if no_volume_keyword_results_no_cat:
+                        clean_no_volume_keyword_results_no_cat = clean_api_results(
+                            no_volume_keyword_results,
+                            volume.volume_number,
+                            first_word_in_series,
+                            volume.multi_volume,
+                            volume.series_name,
+                            volume.extension,
+                            volume.volume_part,
+                            skip_series_similarity=True,
+                            skip_vol_nums_equal=True,
+                            skip_categories_check=True,
+                        )
+                        if clean_no_volume_keyword_results_no_cat:
+                            cleaned_results.extend(
+                                [
+                                    result
+                                    for result in clean_no_volume_keyword_results_no_cat
+                                    if result not in cleaned_results
+                                ]
+                            )
 
             if provider.name == "kobo":
                 print(f"\nSearching Kobo with: {search}")
@@ -9229,6 +9267,7 @@ def process_file(volume, files, file_only=False):
                         re.search(exclusion, contents["Title"], re.IGNORECASE)
                         for exclusion in subtitle_exclusion_keywords
                     )
+                    and not contents["Title"][0].islower()
                 ):
                     print(
                         f"\t{volume.name} already contains ComicInfo.xml, skipping..."
@@ -9488,6 +9527,32 @@ def process_file(volume, files, file_only=False):
             else:
                 print(f"\n\t{provider.name} is disabled, skipping...")
 
+        # if result and hasattr(result, "book"):
+        #     if result.book.number == volume.volume_number:
+        #         if result.book.summary:
+        #             print_book_result(result)
+        #             write_metadata = compare_metadata(result.book, volume.path, files)
+        #             items_found_through_ocr_on_epub.append(volume.path)
+        #             write_to_file(
+        #                 "items_found_through_ocr_on_epub.txt",
+        #                 volume.path,
+        #             )
+        #             return result
+        #         else:
+        #             send_message(
+        #                 f"\tFile: {volume.name}\n\t\tERROR: empty summary, skipping...",
+        #                 error=True,
+        #             )
+        #     else:
+        #         send_message(
+        #             f"\tFile: {volume.name}\n\t\tvolume_number mismatch\n\t\tskipping...\n\t\tresult.book.number: {result.book.number}"
+        #         )
+        #         write_to_file(
+        #             "volume_number_mismatch.txt",
+        #             volume.path,
+        #             without_timestamp=True,
+        #             check_for_dup=True,
+        #         )
         if result and hasattr(result, "book"):
             if result.book.number == volume.volume_number:
                 if ((result.book.is_ebook) or allow_non_is_ebook_results) or (
@@ -9875,6 +9940,7 @@ if __name__ == "__main__":
                         volume.file_type == "chapter"
                         or is_digital_comp
                         or "scan" in lower_name
+                        or "c2c" in lower_name
                     ) and volume.extension == ".cbz":
                         print(f"\n{'-' * 80}")
                         print(f"File: {volume.name}")
@@ -9883,7 +9949,10 @@ if __name__ == "__main__":
                         if skip_comic_info:
                             # Check if ComicInfo.xml exists and skip if it does
                             comic_info_contents = get_comic_info_xml(volume.path)
-                            if comic_info_contents:
+                            if comic_info_contents and (
+                                "<Title>Chapter" in comic_info_contents
+                                or volume.file_type != "chapter"
+                            ):
                                 print("\tComicInfo.xml found, skipping...")
                                 continue
 
