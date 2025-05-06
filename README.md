@@ -1,1 +1,1 @@
-This repo's purpose is to be my personal backup. There will be no support.
+This repo's purpose is a personal backup. There will be no support.
