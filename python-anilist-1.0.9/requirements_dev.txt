@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2021-2022 Amano Team <https://amanoteam.com/> and the python-anilist contributors
+
+tox == 3.24.3
+pytest == 6.2.5
+pytest-asyncio == 0.15.1
+pytest-cov == 2.12.1
