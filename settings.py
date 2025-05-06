@@ -6,6 +6,9 @@ manual_title_approval = False
 # Prompt user before metadata is written to the file
 manualmetadata = False
 
+# Skips updating metadata to the file
+skip_updating_metadata = False
+
 # Prompts the user before the zip comment is written
 manual_zip_comment_approval = False
 
@@ -35,12 +38,6 @@ limit_google_search = False
 
 # Apply multi-processing when processing image links
 multi_process_image_links = False
-
-# Apply multi-processing when pulling descriptions from a file list of EPUBs
-multi_process_pulling_descriptions = True
-
-# Multi-process the internal files of a file for an internal ISBN number
-multi_process_internal_files_for_isbn_search = True
 
 # Skip letters A-#
 skip_letters = False
@@ -76,7 +73,7 @@ scrape_bookwalker = True
 scrape_barnes_and_noble = True
 
 # Scrape Comic Vine
-scrape_comic_vine = True
+scrape_comic_vine = False
 
 # Comic Vine API Key
 comic_vine_api_key = ""
@@ -85,7 +82,7 @@ comic_vine_api_key = ""
 skip_non_volume_ones = False
 
 # Amount of time to sleep when the API hits the rate limit in seconds
-sleep_time = 5
+sleep_time = 7
 
 # Amount of time to sleep when a limit is hit when web scraping
 web_scrape_sleep_time = 5
@@ -159,6 +156,12 @@ skip_volumes_older_than_x_time = False
 
 # Skip any volume comment that already contains an Anilist ID
 skip_volume_if_already_has_anilist_id = False
+
+# Skip any volume coment that already contains a Volume ID
+skip_volume_if_already_has_volume_id = False
+
+# Skip any volume comment that already contains a Series ID
+skip_volume_if_already_has_series_id = False
 
 # Translate title names to improve matching when matching to Anilist
 translate_titles = False
