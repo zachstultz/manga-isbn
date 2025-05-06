@@ -202,13 +202,13 @@ chapter_regex_keywords = r"(?<![A-Za-z])" + (r"|(?<![A-Za-z])").join(chapter_key
 
 ### EXTENION REGEX ###
 # File extensions regex to be used throughout the script
-file_extensions_regex = "|".join(file_extensions).replace(".", "\.")
+file_extensions_regex = "|".join(file_extensions).replace(".", r"\.")
 # Manga extensions regex to be used throughout the script
-manga_extensions_regex = "|".join(manga_extensions).replace(".", "\.")
+manga_extensions_regex = "|".join(manga_extensions).replace(".", r"\.")
 # Novel extensions regex to be used throughout the script
-novel_extensions_regex = "|".join(novel_extensions).replace(".", "\.")
+novel_extensions_regex = "|".join(novel_extensions).replace(".", r"\.")
 # Image extensions regex to be used throughout the script
-image_extensions_regex = "|".join(image_extensions).replace(".", "\.")
+image_extensions_regex = "|".join(image_extensions).replace(".", r"\.")
 
 # REMINDER: ORDER IS IMPORTANT, Top to bottom is the order it will be checked in.
 # Once a match is found, it will stop checking the rest.
@@ -1291,7 +1291,7 @@ def get_series_name_from_volume(name, root=None, test_mode=False, second=False):
     if root and is_one_shot(name, root, test_mode=test_mode):
         name = re.sub(
             r"([-_ ]+|)(((\[|\(|\{).*(\]|\)|\}))|LN)([-_. ]+|)(%s|).*"
-            % file_extensions_regex.replace("\.", ""),
+            % file_extensions_regex.replace(r"\.", ""),
             "",
             name,
             flags=re.IGNORECASE,
@@ -4852,19 +4852,19 @@ def normalize_str(
             "kara",
             "to",
             "ya",
-            "no(?!\.)",
+            r"no(?!\.)",
             "ne",
             "yo",
         ]
         words_to_remove.extend(japanese_particles)
 
     if not skip_misc_words:
-        misc_words = ["((\d+)([-_. ]+)?th)", "x", "×", "HD"]
+        misc_words = [r"((\d+)([-_. ]+)?th)", "x", "×", "HD"]
         words_to_remove.extend(misc_words)
 
     if not skip_storefront_keywords:
         storefront_keywords = [
-            "Book(\s+)?walker",
+            r"Book(\s+)?walker",
         ]
         words_to_remove.extend(storefront_keywords)
 
@@ -5813,7 +5813,9 @@ def scrape_url(url, strainer=None, headers=None, cookies=None, proxy=None, timeo
 
 # Function to click the "Scroll Next" button until the end
 def click_next_buttons(driver):
-    buttons = driver.find_elements(By.XPATH, '//button[@aria-label="Show more volumes"]')
+    buttons = driver.find_elements(
+        By.XPATH, '//button[@aria-label="Show more volumes"]'
+    )
     if not buttons:
         print("\t\t\tNo buttons, attempting to scrape IDs without clicking.")
         return False
@@ -5833,6 +5835,7 @@ def click_next_buttons(driver):
                 break
     return True
 
+
 # Function to click the "Show more volumes" button until the end
 # to load all available volumes into memory
 def click_show_more_button(driver):
@@ -5841,8 +5844,12 @@ def click_show_more_button(driver):
     while True:
         try:
             # Wait for the button to appear
-            button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[@aria-label="Show more volumes"]')))
-            
+            button = wait.until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, '//button[@aria-label="Show more volumes"]')
+                )
+            )
+
             # Scroll into view (optional but helpful)
             driver.execute_script("arguments[0].scrollIntoView(true);", button)
             time.sleep(1)  # Allow time for scrolling
@@ -5850,11 +5857,13 @@ def click_show_more_button(driver):
             # Click the button using JavaScript to avoid issues
             driver.execute_script("arguments[0].click();", button)
             time.sleep(2)  # Allow time for content to load
-            
+
             print("\t\t\tClicked 'Show more volumes' button.")
 
         except Exception:
-            print("\t\t\tNo more 'Show more volumes' button found. Finished loading all items.")
+            print(
+                "\t\t\tNo more 'Show more volumes' button found. Finished loading all items."
+            )
             break  # Exit loop when button is no longer found
 
     return True
@@ -8366,7 +8375,9 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
 
                     # search without volume keyword
                     if not series_info:
-                        print(f"\nAdditional Search without volume Keyword: {search_three}")
+                        print(
+                            f"\nAdditional Search without volume Keyword: {search_three}"
+                        )
                         no_volume_keyword_results = search_google_books(
                             0,
                             volume.path,
@@ -9001,7 +9012,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                                 num,
                                 "Index Number",
                                 "-i",
-                                skip_print=True,
+                                skip_print=manualmetadata == False,
                             )
                         if volume.series_name != data.series:
                             update_metadata(
@@ -9011,7 +9022,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                                 volume.series_name,
                                 "Series",
                                 "--series",
-                                skip_print=True,
+                                skip_print=manualmetadata == False,
                             )
             else:
                 # send_message("\tNo image score results.")
@@ -9036,7 +9047,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             num,
                             "Index Number",
                             "-i",
-                            skip_print=True,
+                            skip_print=manualmetadata == False,
                         )
                     if volume.series_name != data.series:
                         update_metadata(
@@ -9046,7 +9057,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                             volume.series_name,
                             "Series",
                             "--series",
-                            skip_print=True,
+                            skip_print=manualmetadata == False,
                         )
 
     else:
@@ -9083,7 +9094,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     num,
                     "Index Number",
                     "-i",
-                    skip_print=True,
+                    skip_print=manualmetadata == False,
                 )
 
             # Update the series name if it's different from the metadata
@@ -9095,7 +9106,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     volume.series_name,
                     "Series",
                     "--series",
-                    skip_print=True,
+                    skip_print=manualmetadata == False,
                 )
     return None
 
@@ -9522,7 +9533,22 @@ def process_file(volume, files, file_only=False):
                                         )
                             else:
                                 result = None
-                    if result:
+                    if (
+                        result
+                        and hasattr(result, "book")
+                        and result.book.number == volume.volume_number
+                        and result.book.summary
+                        and ((result.book.is_ebook) or allow_non_is_ebook_results)
+                        or (
+                            result
+                            and hasattr(result, "book")
+                            and square_enix_bypass
+                            and re.search(
+                                r"Square", result.book.publisher, re.IGNORECASE
+                            )
+                            and re.search(r"Enix", result.book.publisher, re.IGNORECASE)
+                        )
+                    ):
                         break
             else:
                 print(f"\n\t{provider.name} is disabled, skipping...")
@@ -9994,7 +10020,7 @@ if __name__ == "__main__":
                                     [f"title={formatted_title}"],
                                     "CBZ Archive",
                                     "-s -t cr -m",
-                                    skip_print=True,
+                                    skip_print=manualmetadata == False,
                                     cbz=True,
                                 )
                         continue
