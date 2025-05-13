@@ -180,7 +180,7 @@ exclusion_keywords = [
     r"Tail -",
     r"꞉",
     r":",
-    # r"\d\."
+    r"\d\.",
 ]
 
 # Volume Regex Keywords to be used throughout the script
@@ -9626,7 +9626,7 @@ def process_file(volume, files, file_only=False):
 # Checks if the file name contains multiple numbers
 @lru_cache(maxsize=None)
 def has_multiple_numbers(file_name):
-    return len(re.findall(r"\d+\.0+[1-9]+|\d+\.[1-9]+|\d+", file_name)) > 1
+    return len(re.findall(r"\d+\.0+[0-9]+|\d+\.[0-9]+|\d+", file_name)) > 1
 
 
 # Function to parse boolean arguments from string values
