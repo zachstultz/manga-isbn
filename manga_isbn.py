@@ -8547,6 +8547,25 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         time.sleep(web_scrape_sleep_time)
                 else:
                     print("\tNo results found.")
+                    
+                if volume.volume_number < 10 and volume.volume_number > 0:
+                    search_six = f"{search_base} 0{volume_number_search_string}"
+
+                    bookwalker_search_results_six = text_search_bookwalker(
+                        search_six, bw_category
+                    )
+                    if bookwalker_search_results_six:
+                        for bookwalker_r in bookwalker_search_results_six:
+                            data_result = get_bookwalker_books_meta(bookwalker_r)
+                            if data_result and data_result not in bookwalker_results:
+                                bookwalker_results.append(data_result)
+                            print(
+                                f"\n\t\tSleeping for {web_scrape_sleep_time} seconds...\n"
+                            )
+                            time.sleep(web_scrape_sleep_time)
+                    else:
+                        print("\tNo results found for search_six.")
+
                 bw_limit = 20
                 print(
                     f"\nSearching Bookwalker with: {search_three}\n\tLimit: {bw_limit}"
