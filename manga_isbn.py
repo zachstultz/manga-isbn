@@ -5522,7 +5522,7 @@ rx_remove_x_hash = re.compile(r"((x|#))", re.IGNORECASE)
 
 
 # Retrieves and returns the file part from the file name
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=3500)
 def get_file_part(file, chapter=False, series_name=None, subtitle=None):
     result = ""
 
@@ -8547,7 +8547,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         time.sleep(web_scrape_sleep_time)
                 else:
                     print("\tNo results found.")
-                    
+
                 if volume.volume_number < 10 and volume.volume_number > 0:
                     search_six = f"{search_base} 0{volume_number_search_string}"
 
