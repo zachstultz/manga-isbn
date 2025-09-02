@@ -475,6 +475,11 @@ def image_arg_parser():
         help="If enabled, the program will ask the user to submit a series_id for scraping.",
         required=False,
     )
+    parser.add_argument(
+        "--allow_non_is_ebook_results",
+        help="If enabled, the program will allow non-digital (paperback) ebook results.",
+        required=False,
+    )
     return parser
 
 
@@ -4367,7 +4372,7 @@ def compare_metadata(book, epub_path, files):
                     "language=" + re.sub(r"([,=])", r"^\1", book.language)
                 )
                 data_comparison.append(data.languages)
-        if book.publisher and data.publisher != book.publisher:
+        if book.publisher and data.publisher != book.publisher and "National Geographic" not in book.publisher:
             if extension == ".epub":
                 update_metadata(
                     "ebook-meta",
@@ -9874,6 +9879,11 @@ if __name__ == "__main__":
 
     if args.manual_series_id_mode:
         manual_series_id_mode = parse_bool_argument(args.manual_series_id_mode)
+
+    if args.allow_non_is_ebook_results:
+        allow_non_is_ebook_results = parse_bool_argument(
+            args.allow_non_is_ebook_results
+        )
 
     if args.manual_zip_comment_approval:
         manual_zip_comment_approval = parse_bool_argument(
