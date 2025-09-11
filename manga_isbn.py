@@ -2695,11 +2695,16 @@ def search_google_books(
                 month = ""
                 day = ""
 
-                if len(published_date) > 4:
+                if len(published_date) > 7:
                     month = published_date[5:7].zfill(2)
                     day = published_date[8:10].zfill(2)
                     published_date = f"{year}-{month}-{day}"
                     published_date = published_date.rstrip("-")
+                elif len(published_date) > 4:
+                    month = published_date[5:7].zfill(2)
+                    day = "01"
+                    published_date = f"{year}-{month}-{day}"
+                    published_date = published_date.rstrip("-") 
                 else:
                     month = "01"
                     day = "01"
