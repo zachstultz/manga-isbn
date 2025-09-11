@@ -2692,16 +2692,19 @@ def search_google_books(
             # Get the release date
             if published_date:
                 year = published_date[0:4]
-                month = ''
-                day = ''
-                
+                month = ""
+                day = ""
+
                 if len(published_date) > 4:
                     month = published_date[5:7].zfill(2)
                     day = published_date[8:10].zfill(2)
                     published_date = f"{year}-{month}-{day}"
                     published_date = published_date.rstrip("-")
                 else:
-                    published_date = year
+                    month = "01"
+                    day = "01"
+                    published_date = f"{year}-{month}-{day}"
+                    published_date = published_date.rstrip("-")
 
             # Get the page count
             page_count = volume_info.get("pageCount", "")
@@ -4377,7 +4380,11 @@ def compare_metadata(book, epub_path, files):
                     "language=" + re.sub(r"([,=])", r"^\1", book.language)
                 )
                 data_comparison.append(data.languages)
-        if book.publisher and data.publisher != book.publisher and "National Geographic" not in book.publisher:
+        if (
+            book.publisher
+            and data.publisher != book.publisher
+            and "National Geographic" not in book.publisher
+        ):
             if extension == ".epub":
                 update_metadata(
                     "ebook-meta",
