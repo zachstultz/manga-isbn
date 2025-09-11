@@ -2692,11 +2692,16 @@ def search_google_books(
             # Get the release date
             if published_date:
                 year = published_date[0:4]
-                month = published_date[5:7].zfill(2)
-                day = published_date[8:10].zfill(2)
-
-                published_date = f"{year}-{month}-{day}"
-                published_date = published_date.rstrip("-")
+                month = ''
+                day = ''
+                
+                if len(published_date) > 4:
+                    month = published_date[5:7].zfill(2)
+                    day = published_date[8:10].zfill(2)
+                    published_date = f"{year}-{month}-{day}"
+                    published_date = published_date.rstrip("-")
+                else:
+                    published_date = year
 
             # Get the page count
             page_count = volume_info.get("pageCount", "")
