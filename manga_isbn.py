@@ -2704,7 +2704,7 @@ def search_google_books(
                     month = published_date[5:7].zfill(2)
                     day = "01"
                     published_date = f"{year}-{month}-{day}"
-                    published_date = published_date.rstrip("-") 
+                    published_date = published_date.rstrip("-")
                 else:
                     month = "01"
                     day = "01"
@@ -10021,9 +10021,13 @@ if __name__ == "__main__":
                         if skip_comic_info:
                             # Check if ComicInfo.xml exists and skip if it does
                             comic_info_contents = get_comic_info_xml(volume.path)
-                            if comic_info_contents and (
-                                "<Title>Chapter" in comic_info_contents
-                                or volume.file_type != "chapter"
+                            if (
+                                comic_info_contents
+                                and (
+                                    "<Title>Chapter" in comic_info_contents
+                                    or volume.file_type != "chapter"
+                                )
+                                and ".0</Title>" not in comic_info_contents
                             ):
                                 print("\tComicInfo.xml found, skipping...")
                                 continue
