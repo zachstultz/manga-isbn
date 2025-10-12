@@ -10058,16 +10058,32 @@ if __name__ == "__main__":
                             # Get metadata from CBZ file
                             data = get_cbz_metadata(volume.path)
 
-                            if data and data.title != title:
-                                print(f"Data Title: {data.title}")
+                            if data:
+                                can_continue = False
+
+                                if data.title != title:
+                                    print(f"Data Title: {data.title}")
+                                    print(f"File Title: {title}")
+                                    can_continue = True
+
+                                if data.issue != volume.index_number:
+                                    print(f"Data Issue: {data.issue}")
+                                    print(f"File Issue: {volume.index_number}")
+                                    can_continue = True
+
+                                if not can_continue:
+                                    continue  # Skip this iteration if no mismatches found
+
                                 formatted_title = re.sub(r"([,=])", r"^\1", title)
 
                                 # Update metadata using ComicTagger
                                 update_metadata(
                                     "comictagger",
                                     volume.path,
-                                    [data.title],
-                                    [f"title={formatted_title}"],
+                                    [data.title, data.issue],
+                                    [
+                                        f"title={formatted_title}, issue={volume.index_number}"
+                                    ],
                                     "CBZ Archive",
                                     "-s -t cr -m",
                                     skip_print=manualmetadata == False,
