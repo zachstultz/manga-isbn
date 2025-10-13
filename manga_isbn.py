@@ -10068,7 +10068,9 @@ if __name__ == "__main__":
 
                                 if data.issue != volume.index_number:
                                     print(f"Data Issue: {data.issue}")
-                                    print(f"File Issue: {volume.index_number}")
+                                    print(
+                                        f"File Issue: {volume.index_number if not volume.multi_volume else volume.index_number[0]}"
+                                    )
                                     can_continue = True
 
                                 if not can_continue:
@@ -10082,7 +10084,7 @@ if __name__ == "__main__":
                                     volume.path,
                                     [data.title, data.issue],
                                     [
-                                        f"title={formatted_title}, issue={volume.index_number}"
+                                        f"title={formatted_title}, issue={volume.index_number if not volume.multi_volume else volume.index_number[0]}"
                                     ],
                                     "CBZ Archive",
                                     "-s -t cr -m",
