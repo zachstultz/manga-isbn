@@ -63,13 +63,12 @@ script_version_text = "v{}.{}.{}".format(*script_version)
 # ======= REQUIRED INSTALLS =======
 # 1. WGET Install: sudo apt-get install wget -y
 # 2. Calibre Install: sudo apt-get install xdg-utils libxcb-cursor0 libxcb-xinerama0 -y && sudo apt-get install xz-utils -y && sudo apt-get install libopengl0 -y && sudo apt-get install libegl1 -y && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
-# 3. Misc (required for requirements & comictagger to install successfully): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu
-# 4. Comictagger Install: sudo pip3 install comictagger
-# 5. Chrome Install: sudo apt-get update && sudo apt install /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb -y
-# 6. PyQT5 Install: sudo apt-get install python3-pyqt5 -y
-# 7. Tesseract Install: sudo apt-get install tesseract-ocr -y
-# 8. Requirements Install: pip3 install -r /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/requirements.txt
-# 9. Anilist Install: pip3 install /scripts/komga-cover-extractor/addons/manga_isbn/python-anilist-1.0.9/.
+# 3. Misc (required for comictagger in requirements): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu
+# 4. Chrome Install: sudo apt-get update && sudo apt install /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb -y
+# 5. PyQT5 Install: sudo apt-get install python3-pyqt5 -y
+# 6. Tesseract Install: sudo apt-get install tesseract-ocr -y
+# 7. Requirements Install: pip3 install -r /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/requirements.txt
+# 8. Anilist Install: pip3 install /scripts/komga-cover-extractor/addons/manga_isbn/python-anilist-1.0.9/.
 
 # downoads required items for nltk.tokenize
 nltk.download("punkt")
