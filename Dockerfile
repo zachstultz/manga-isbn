@@ -1,34 +1,37 @@
 # Use a specific version of the Python image
-FROM python:3.11.4-slim-bullseye
+FROM python:3.13.8-slim-bookworm
 
 # Set the working directory to /app
 WORKDIR /app
 
 # Create a new user called "appuser"
 RUN useradd -m appuser
+
+# Set the default environment variables
 ARG PUID=1000
 ARG PGID=1000
 
+# To avoid partial output in logs
+ENV PYTHONUNBUFFERED=1
+
 # Set ownership to appuser and switch to "appuser"
-# RUN echo "deb http://deb.debian.org/debian buster non-free" >> /etc/apt/sources.list
-RUN apt-get update
 RUN groupmod -o -g "$PGID" appuser && usermod -o -u "$PUID" appuser
 
 # Allow users to specify UMASK (default value is 022)
-ENV UMASK 022
+ENV UMASK=022
 RUN umask "$UMASK"
 
 # Copy the current directory contents into the container at /app
 COPY --chown=appuser:appuser . .
 
 # Install Misc Stuff
-RUN apt-get install -y tzdata nano
+RUN apt-get update
+RUN apt-get install -y tzdata nano build-essential
 
 # Install necessary packages and requirements
 RUN apt-get update
 RUN apt-get install -y wget
-RUN apt-get install -y build-essential
-RUN apt-get install -y xdg-utils xz-utils libopengl0 libegl1
+RUN apt-get install -y xdg-utils libxcb-cursor0 libxcb-xinerama0 xz-utils libopengl0 libegl1
 RUN wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sh /dev/stdin
 RUN apt-get install -y libicu-dev pkg-config python3-icu
 RUN apt-get install -y /app/chrome/google-chrome-stable_current_amd64.deb
@@ -45,7 +48,6 @@ RUN rm -rf /var/lib/apt/lists/*
 USER appuser
 
 # Set the default CMD arguments for the script
-# --webhook is the only item using nargs that needs to be accounted for, and tested
 CMD python3 -u manga_isbn.py \
     --file="$FILE" \
     --path="$FOLDER_PATH" \
