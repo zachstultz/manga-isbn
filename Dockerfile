@@ -52,7 +52,7 @@ CMD python3 -u manga_isbn.py \
     --file="$FILE" \
     --path="$FOLDER_PATH" \
     --manualmetadata="$MANUAL_METADATA" \
-    --skip_comic_info="$SKIP_COMIC_INFO" \
+    --skip_if_has_metadata="$SKIP_IF_HAS_METADATA" \
     --skip_letters="$SKIP_LETTERS" \
     --only_image_comparision="$ONLY_IMAGE_COMPARISION" \
     --skip_all_non_comic_tagger_tagged="$SKIP_ALL_NON_COMIC_TAGGER_TAGGED" \
@@ -60,7 +60,6 @@ CMD python3 -u manga_isbn.py \
     --skip_if_has_zip_comment="$SKIP_IF_HAS_ZIP_COMMENT" \
     --accepted_file_types="$ACCEPTED_FILE_TYPES" \
     --webhook="$WEBHOOK" \
-    --skip_novels_with_metadata="$SKIP_NOVELS_WITH_METADATA" \
     --skip_non_volume_ones="$SKIP_NON_VOLUME_ONES" \
     --skip_volumes_older_than_x_time="$SKIP_VOLUMES_OLDER_THAN_X_TIME" \
     --scrape_google="$SCRAPE_GOOGLE" \

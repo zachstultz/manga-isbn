@@ -299,9 +299,9 @@ def image_arg_parser():
         required=False,
     )
     parser.add_argument(
-        "-sci",
-        "--skip_comic_info",
-        help="If enabled, the program will skip files that contain comic info inside the zip.",
+        "-sihm",
+        "--skip_if_has_metadata",
+        help="If enabled, the program will skip files that already have metadata.",
         required=False,
     )
     parser.add_argument(
@@ -345,12 +345,6 @@ def image_arg_parser():
         action="append",
         nargs="*",
         help="The discord webhook url for notifications about changes and errors.",
-        required=False,
-    )
-    parser.add_argument(
-        "-snwm",
-        "--skip_novels_with_metadata",
-        help="If enabled, the program will skip novels that have a summary.",
         required=False,
     )
     parser.add_argument(
@@ -9262,11 +9256,9 @@ def process_file(volume, files, file_only=False):
                         print("\tcontains web links, skipping...")
                         return None
 
-                if skip_all_non_comic_tagger_tagged and not skip_comic_info:
+                if skip_all_non_comic_tagger_tagged and not skip_if_has_metadata:
                     if comic_info_contents:
-                        if not re.search(
-                            r"ComicTagger", comic_info_contents, re.IGNORECASE
-                        ):
+                        if "comictagger" not in comic_info_contents.lower():
                             print("\tnot tagged by comictagger, skipping...")
                             return None
                     else:
@@ -9297,7 +9289,7 @@ def process_file(volume, files, file_only=False):
             elif (
                 not has_comic_info
                 and skip_all_non_comic_tagger_tagged
-                and not skip_comic_info
+                and not skip_if_has_metadata
             ):
                 print("\tno comicinfo contents found, skipping")
                 return None
@@ -9308,7 +9300,7 @@ def process_file(volume, files, file_only=False):
                     print(f"\t{zip_comments}")
                     return None
 
-            elif skip_comic_info and has_comic_info:
+            elif skip_if_has_metadata and has_comic_info:
                 contents = parse_comicinfo_xml(comic_info_contents)
 
                 if (
@@ -9327,7 +9319,7 @@ def process_file(volume, files, file_only=False):
                     return None
 
         elif volume.extension == ".epub":
-            if skip_novels_with_metadata:
+            if skip_if_has_metadata:
                 epub_metadata = get_epub_metadata(volume.path)
                 if epub_metadata:
                     series_no_meta = remove_punctuation(volume.series_name)
@@ -9749,10 +9741,10 @@ if __name__ == "__main__":
         print(f"\tskip_letters: {skip_letters}")
 
     # Parse more boolean arguments
-    if args.skip_comic_info:
-        skip_comic_info = parse_bool_argument(args.skip_comic_info)
+    if args.skip_if_has_metadata:
+        skip_if_has_metadata = parse_bool_argument(args.skip_if_has_metadata)
     if not mute_settings_output:
-        print(f"\tskip_comic_info: {skip_comic_info}")
+        print(f"\tskip_if_has_metadata: {skip_if_has_metadata}")
 
     if args.manualmetadata:
         manualmetadata = parse_bool_argument(args.manualmetadata)
@@ -9763,11 +9755,6 @@ if __name__ == "__main__":
         skip_updating_metadata = parse_bool_argument(args.skip_updating_metadata)
     if not mute_settings_output:
         print(f"\tskip_updating_metadata: {skip_updating_metadata}")
-
-    if args.skip_novels_with_metadata:
-        skip_novels_with_metadata = parse_bool_argument(args.skip_novels_with_metadata)
-    if not mute_settings_output:
-        print(f"\tskip_novels_with_metadata: {skip_novels_with_metadata}")
 
     if args.skip_non_volume_ones:
         skip_non_volume_ones = parse_bool_argument(args.skip_non_volume_ones)
@@ -10018,7 +10005,7 @@ if __name__ == "__main__":
                         print(f"File: {volume.name}")
                         print("-" * 80)
 
-                        if skip_comic_info:
+                        if skip_if_has_metadata:
                             # Check if ComicInfo.xml exists and skip if it does
                             comic_info_contents = get_comic_info_xml(volume.path)
                             if (

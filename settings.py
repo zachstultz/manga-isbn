@@ -51,8 +51,8 @@ skip_file_if_isbn_in_zip_comment = False
 # Skip the current file if a zip comment is found
 skip_if_has_zip_comment = False
 
-# Skip files containing comic information
-skip_comic_info = False
+# Skip files containing metadata
+skip_if_has_metadata = False
 
 # Skip all files that were not tagged by comictagger
 skip_all_non_comic_tagger_tagged = False
@@ -144,9 +144,6 @@ sentence_similarity_score = 0.85
 
 # Discord webhook URL for notifications about changes and errors
 discord_webhook_url = []
-
-# Skip novels with a summary, aka skips novels that already have metadata
-skip_novels_with_metadata = False
 
 # Log to various files for various reasons
 log_to_file = True
