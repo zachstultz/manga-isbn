@@ -1,8 +1,3 @@
-accepted_file_types = []
-
-# Manual title extraction approval
-manual_title_approval = False
-
 # Prompt user before metadata is written to the file
 manualmetadata = False
 
@@ -32,9 +27,6 @@ skip_image_comparison = False
 
 # Sleep at certain intervals to avoid API rate limiting
 api_rate_limit = True
-
-# Restrict the Google search to one or two searches
-limit_google_search = False
 
 # Apply multi-processing when processing image links
 multi_process_image_links = False
@@ -81,69 +73,8 @@ comic_vine_api_key = ""
 # Skip non-volume ones
 skip_non_volume_ones = False
 
-# Amount of time to sleep when the API hits the rate limit in seconds
-sleep_time = 7
-
-# Amount of time to sleep when a limit is hit when web scraping
-web_scrape_sleep_time = 5
-
-# Amount of time to sleep between Comic Vine results
-comic_vine_sleep_time = 36
-
-# ISBN-13 regex used throughout the program
-isbn_13_regex = "(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})"
-
 # Ignored folder names
 ignored_folder_names = []
-
-# Total CBZ/EPUB files encountered
-total_files = 0
-
-# Files metadata was written to
-items_changed = []
-
-# Any errors encountered
-errors = []
-
-# Successful ISBN retrievals
-successful_isbn_retrievals = []
-
-# Unsuccessful ISBN retrievals
-unsuccessful_isbn_retrievals = []
-
-# Successful Google API matches
-successful_api_matches = []
-
-# Unsuccessful Google API matches
-unsuccessful_api_matches = []
-
-# EPUBs where we couldn't find an ISBN, but our second attempt was successful
-# The second attempt being an OCR on all the
-items_found_through_ocr_on_epub = []
-
-# Items that failed an API match through string search and image comparison
-items_not_found_through_image_comparision_search = []
-
-# Amount of API hits for the current session
-api_hits = 0
-
-# Total amount of retries for an API request
-total_api_re_attempts = 10
-
-# Required image similarity score for image similarity
-required_image_ssim_score = 0.74
-
-# Required MSE score to indicate a good match
-required_image_mse_score = 0.37
-
-# Required string similarity score using similar method
-required_similarity_score = 0.97
-
-# Used when checking for a match to Anilist
-sentence_similarity_score = 0.85
-
-# Discord webhook URL for notifications about changes and errors
-discord_webhook_url = []
 
 # Log to various files for various reasons
 log_to_file = True
@@ -160,12 +91,6 @@ skip_volume_if_already_has_volume_id = False
 # Skip any volume comment that already contains a Series ID
 skip_volume_if_already_has_series_id = False
 
-# Translate title names to improve matching when matching to Anilist
-translate_titles = False
-
-# Cache for series ID results to avoid unnecessary API hits
-series_ids_cache = []
-
 # True = image similarity uses internal file cover, False = image similarity uses external file cover
 use_internal_cover = False
 
@@ -180,15 +105,6 @@ allow_non_is_ebook_results = False
 
 # Chapter support is currently experimental and may not work as intended
 chapter_support_toggle = True
-
-# Cached Google Books results, for later use
-cached_series_result = None
-
-# Whether or not a successful match was made with the previous cached results
-successful_match = False
-
-# Cache for image links and their data
-image_link_cache = []
 
 # Skip volumes that are labeled "volume 1"
 skip_volume_one = False
@@ -207,21 +123,6 @@ skip_to_directory = ""
 
 # Skips any cbz volume that doesn't contain a digital keyword
 skip_non_digital_manga = True
-
-# Exception keywords used when deleting chapter files with the delete_chapters_from_downloads() function.
-# Files containing a match to any exception keyword will be ignored.
-# Case is ignored when checked.
-exception_keywords = [
-    r"Extra",
-    r"One(-|)shot",
-    r"Omake",
-    r"Special",
-    r"Bonus",
-    r"Side(-|)story",
-]
-
-# Multi-process files
-multi_process_files = False
 
 # Mutes settings output
 mute_settings_output = False

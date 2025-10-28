@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import ast
+import base64
 import calendar
 import concurrent.futures
 import datetime
@@ -12,22 +12,18 @@ import os
 import random
 import string
 import subprocess
-import sys
-import threading
 import time
 import traceback
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+from collections import defaultdict
 from datetime import date, datetime
 from difflib import SequenceMatcher
 from functools import lru_cache, partial
-from math import log10, sqrt
 from urllib.parse import urlparse
 
 import anilist
-import base64
-import cProfile
 import cv2
 import langcodes
 import nltk
@@ -38,9 +34,8 @@ import requests
 import scandir
 import translators as ts
 from bs4 import BeautifulSoup, SoupStrainer
-from collections import defaultdict
 from discord_webhook import DiscordEmbed, DiscordWebhook
-from langcodes import *
+from langcodes import standardize_tag
 from langdetect import detect
 from lxml import etree
 from nltk.tokenize import sent_tokenize
@@ -48,15 +43,15 @@ from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from settings import *
+from selenium.webdriver.support.ui import WebDriverWait
 from simyan.comicvine import Comicvine, ComicvineResource
-from simyan.sqlite_cache import SQLiteCache
 from skimage.metrics import structural_similarity as ssim
 from titlecase import titlecase
 from unidecode import unidecode
 from webdriver_manager.chrome import ChromeDriverManager
+
+from settings import *
 
 script_version = (1, 1, 41)
 script_version_text = "v{}.{}.{}".format(*script_version)
@@ -264,9 +259,98 @@ image_quality = 40
 # instead of jpg format.
 output_covers_as_webp = False
 
+# Translate title names to improve matching when matching to Anilist
+translate_titles = False
+
 # Used to avoid duplicate titles
 file_descriptions = []
 result_subtitles = []
+
+# Cache for series ID results to avoid unnecessary API hits
+series_ids_cache = []
+
+# Cache for image links and their data
+image_link_cache = []
+
+# Whether or not a successful match was made with the previous cached results
+successful_match = False
+
+# Cached Google Books results, for later use
+cached_series_result = None
+
+# Files containing a match to any exception keyword will be ignored.
+# Case is ignored when checked.
+exception_keywords = [
+    r"Extra",
+    r"One(-|)shot",
+    r"Omake",
+    r"Special",
+    r"Bonus",
+    r"Side(-|)story",
+]
+
+accepted_file_types = []
+
+# Files metadata was written to
+items_changed = []
+
+# Any errors encountered
+errors = []
+
+# Successful ISBN retrievals
+successful_isbn_retrievals = []
+
+# Unsuccessful ISBN retrievals
+unsuccessful_isbn_retrievals = []
+
+# Successful Google API matches
+successful_api_matches = []
+
+# Unsuccessful Google API matches
+unsuccessful_api_matches = []
+
+# EPUBs where we couldn't find an ISBN, but our second attempt was successful
+# The second attempt being an OCR on all the
+items_found_through_ocr_on_epub = []
+
+# Items that failed an API match through string search and image comparison
+items_not_found_through_image_comparision_search = []
+
+# Amount of time to sleep when the API hits the rate limit in seconds
+sleep_time = 7
+
+# Amount of time to sleep when a limit is hit when web scraping
+web_scrape_sleep_time = 5
+
+# Amount of time to sleep between Comic Vine results
+comic_vine_sleep_time = 36
+
+# ISBN-13 regex used throughout the program
+isbn_13_regex = "(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})"
+
+# Total CBZ/EPUB files encountered
+total_files = 0
+
+# Amount of API hits for the current session
+api_hits = 0
+
+# Total amount of retries for an API request
+total_api_re_attempts = 10
+
+# Required image similarity score for image similarity
+required_image_ssim_score = 0.74
+
+# Required MSE score to indicate a good match
+required_image_mse_score = 0.37
+
+# Required string similarity score using similar method
+required_similarity_score = 0.97
+
+# Used when checking for a match to Anilist
+sentence_similarity_score = 0.85
+
+# Discord webhook URL for notifications about changes and errors
+discord_webhook_url = []
 
 
 # argument parser
@@ -384,7 +468,7 @@ def image_arg_parser():
     )
     parser.add_argument(
         "--skip_volume_if_already_has_volume_id",
-        help="If enabled, the program will skip volumes that already have a series id.",
+        help="If enabled, the program will skip volumes that already have a volume id.",
         required=False,
     )
     parser.add_argument(
