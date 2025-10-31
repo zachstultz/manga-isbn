@@ -17,8 +17,7 @@ import traceback
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
-from collections import defaultdict
-from datetime import date, datetime
+from datetime import datetime
 from difflib import SequenceMatcher
 from functools import lru_cache, partial
 from urllib.parse import urlparse
@@ -2600,6 +2599,9 @@ def search_google_books(
                         subtitle.strip(),
                         re.IGNORECASE,
                     ).strip()
+                
+                # Titlecase the subtitle
+                subtitle = titlecase(subtitle)
 
             # Get the maturity rating
             maturity_rating = volume_info.get("maturityRating", "")
@@ -3251,64 +3253,6 @@ def check_for_author_upgrade(writers_from_epub, writers_from_api):
     else:
         print("No writers found in epub or api")
     return result
-
-
-# Runs various logic to determine whether or not the upgrade will be approved.
-# def check_for_author_upgrade(writers_from_epub, writers_from_api):
-#     result = ""
-
-#     if not writers_from_epub and not writers_from_api:
-#         print("No writers found in epub or api")
-#         return result
-
-#     if not writers_from_epub and writers_from_api:
-#         return (
-#             writers_from_api
-#             if isinstance(writers_from_api, str)
-#             else ", ".join(writers_from_api)
-#         )
-
-#     # if writers_from_api contains a comma, split it and add each item to writers_from_api
-#     if "," in writers_from_api:
-#         writers_from_api = [
-#             item.strip() for item in writers_from_api.split(",") if item.strip()
-#         ]
-
-#     epub_writers_string = convert_to_ascii(
-#         str(convert_writers_object_to_string_array(writers_from_epub))
-#     )
-
-#     if epub_writers_string:
-#         if not isinstance(writers_from_api, list):
-#             writers_from_api = [writers_from_api]
-
-#         for writer in writers_from_api[:]:
-#             writer = convert_to_ascii(writer)
-
-#             if writer and len(writer.split()) == 2:
-#                 flipped = " ".join(list(reversed(writer.split(" "))))
-
-#                 if (
-#                     writer.lower() in epub_writers_string.lower()
-#                     or flipped.lower() in epub_writers_string.lower()
-#                 ):
-#                     # remove from epub_writers_string
-#                     for item in writers_from_api:
-#                         if (
-#                             writer.lower() in convert_to_ascii(item).lower()
-#                             or flipped.lower() in item.lower()
-#                         ):
-#                             writers_from_api.remove(item)
-#             elif writer and writer.lower() in epub_writers_string.lower():
-#                 # remove from epub_writers_string
-#                 for item in writers_from_api:
-#                     if writer.lower() in convert_to_ascii(item).lower():
-#                         writers_from_api.remove(item)
-#     if writers_from_api:
-#         for item in writers_from_api:
-#             result += f"{item}, " if item != writers_from_api[-1] else item
-
-#     return result
 
 
 # Checks for a published-date upgrade
@@ -8898,77 +8842,6 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     series_id_w_matching_vol_to_ord_num = []
 
                 if passed:
-                    # Combine all arrays into a list of tuples, with each tuple containing the element and the array name
-                    # all_arrays = [
-                    #     ("clean_r_results", clean_r_results),
-                    #     ("clean_b_results", clean_b_results),
-                    #     (
-                    #         "clean_no_volume_keyword_results",
-                    #         clean_no_volume_keyword_results,
-                    #     ),
-                    #     (
-                    #         "clean_no_volume_keyword_results_newest",
-                    #         clean_no_volume_keyword_results_newest,
-                    #     ),
-                    #     (
-                    #         "clean_no_volume_keyword_results_no_cat",
-                    #         clean_no_volume_keyword_results_no_cat,
-                    #     ),
-                    # ]
-
-                    # # Dictionary to store frequency of each element in different arrays
-                    # frequency_dict = defaultdict(lambda: defaultdict(int))
-
-                    # for array_name, array in all_arrays:
-                    #     for element in array:
-                    #         frequency_dict[element][array_name] += 1
-
-                    # # Identify elements that appear in two or more arrays
-                    # duplicates_in_multiple_arrays = {
-                    #     element: arrays
-                    #     for element, arrays in frequency_dict.items()
-                    #     if len(arrays) > 1
-                    # }
-
-                    # # Identify elements that are unique (found in only one array)
-                    # unique_elements = {}
-                    # array_names = []
-                    # for element, arrays in frequency_dict.items():
-                    #     if len(arrays) == 1 and arrays not in array_names:
-                    #         unique_elements[element] = arrays
-                    #         array_names.append(arrays)
-
-                    # # Log the duplicate
-                    # for element, arrays in duplicates_in_multiple_arrays.items():
-                    #     message = f"{element.api_link}:"
-                    #     last_element = list(arrays.keys())[-1]
-                    #     for array_name, count in arrays.items():
-                    #         message += (
-                    #             f"{array_name}" + ","
-                    #             if array_name != last_element
-                    #             else f"{array_name}"
-                    #         )
-                    #     write_to_file(
-                    #         "duplicates_report.txt",
-                    #         message,
-                    #         without_timestamp=True,
-                    #         check_for_dup=True,
-                    #     )
-
-                    # # Log the unique elements
-                    # if not duplicates_in_multiple_arrays:
-                    #     for element, arrays in unique_elements.items():
-                    #         array_name = next(
-                    #             iter(arrays)
-                    #         )  # Get the only array name where this element is found
-                    #         message = f"{element.api_link}:{array_name}"
-                    #         write_to_file(
-                    #             "unique_elements_report.txt",
-                    #             message,
-                    #             without_timestamp=True,
-                    #             check_for_dup=True,
-                    #         )
-
                     if (
                         session_result
                         and hasattr(session_result, "api_results")
@@ -9490,10 +9363,9 @@ def process_file(volume, files, file_only=False):
             file_descriptions.extend(result_subtitles)
 
             # set the variable to the file extension if all of the files have the same extension
-            use_multi = volume.extension == ".epub" and all(
+            use_multi = volume.extension in novel_extensions and all(
                 file.extension == volume.extension for file in dir_files
             )
-            # use_multi = True
 
             if use_multi:
                 with concurrent.futures.ThreadPoolExecutor() as executor:
