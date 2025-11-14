@@ -52,7 +52,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from settings import *
 
-script_version = (1, 1, 41)
+script_version = (1, 1, 44)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED INSTALLS =======
@@ -350,6 +350,21 @@ sentence_similarity_score = 0.85
 
 # Discord webhook URL for notifications about changes and errors
 discord_webhook_url = []
+
+# Regular expressions to match cover patterns
+cover_patterns = [
+    r"(cover\.([A-Za-z]+))$",
+    r"(\b(Cover([0-9]+|)|CoverDesign|page([-_. ]+)?cover)\b)",
+    r"(\b(p000|page_000)\b)",
+    r"((\s+)0+\.(.{2,}))",
+    r"(\bindex[-_. ]1[-_. ]1\b)",
+    r"(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})",
+]
+
+# Pre-compiled regular expressions for cover patterns
+compiled_cover_patterns = [
+    re.compile(pattern, flags=re.IGNORECASE) for pattern in cover_patterns
+]
 
 
 # argument parser
@@ -1408,7 +1423,8 @@ def get_series_name_from_volume(name, root=None, test_mode=False, second=False):
         name = name[:-1].strip()
 
     # remove the file extension if still remaining
-    name = re.sub(r"(%s)$" % file_extensions_regex, "", name).strip()
+    if get_file_extension(name) in file_extensions:
+        name = re.sub(r"(%s)$" % file_extensions_regex, "", name).strip()
 
     # Remove "- Complete" from the end
     # "Series Name - Complete" -> "Series Name"
@@ -1489,17 +1505,19 @@ def get_series_name_from_chapter(name, root, chapter_number="", second=False):
 def chapter_file_name_cleaning(
     file_name, chapter_number="", skip=False, regex_matched=False
 ):
-    # removes any brackets and their contents
+    # Removes any brackets and their contents
     file_name = (
         remove_brackets(file_name) if contains_brackets(file_name) else file_name
     )
 
     # Remove any single brackets at the end of the file_name
-    # EX: "Death Note - Bonus Chapter (" -> "Death Note - Bonus Chapter"
-    file_name = re.sub(r"(\s(([\(\[\{])|([\)\]\}])))$", "", file_name).strip()
+    # EX: "Series Name - Bonus Chapter (" -> "Series Name - Bonus Chapter"
+    if ends_with_starting_bracket(file_name):
+        # drop the last character
+        file_name = file_name[:-1].strip()
 
-    # EX: "006.3 - One Piece" -> "One Piece"
-    if regex_matched != 2:
+    # EX: "006.3 - Series Name" -> "Series Name"
+    if regex_matched != 2 and file_name[0].isdigit():
         file_name = re.sub(
             r"(^([0-9]+)(([-_.])([0-9]+)|)+(\s+)?([-_]+)(\s+))", "", file_name
         ).strip()
@@ -1514,7 +1532,7 @@ def chapter_file_name_cleaning(
         ).strip()
 
     # Remove - at the end of the file_name
-    # EX: " One Piece -" -> "One Piece"
+    # EX: " Series Name -" -> "Series Name"
     if file_name.endswith("-"):
         file_name = re.sub(r"(?<![A-Za-z])(-\s*)$", "", file_name).strip()
 
@@ -1525,25 +1543,17 @@ def chapter_file_name_cleaning(
         return ""
 
     # if chapter_number and it's at the end of the file_name, remove it
-    # EX: "One Piece 001" -> "One Piece"
-    if not regex_matched:
-        if chapter_number != "" and re.search(
+    # EX: "Series Name 001" -> "Series Name"
+    if not regex_matched and chapter_number != "" and file_name[-1].isdigit():
+        file_name = re.sub(
             r"-?(\s+)?((?<!({})(\s+)?)(\s+)?\b#?((0+)?({}|{}))#?$)".format(
                 chapter_regex_keywords,
                 chapter_number,
                 chapter_number,
             ),
+            "",
             file_name,
-        ):
-            file_name = re.sub(
-                r"-?(\s+)?((?<!({})(\s+)?)(\s+)?\b#?((0+)?({}|{}))#?$)".format(
-                    chapter_regex_keywords,
-                    chapter_number,
-                    chapter_number,
-                ),
-                "",
-                file_name,
-            ).strip()
+        ).strip()
 
     # Remove any season keywords
     if "s" in file_name.lower() and re.search(
@@ -1595,7 +1605,7 @@ def get_min_and_max_numbers(string):
     numbers = []
 
     # replace hyphens and underscores with spaces using regular expressions
-    numbers_search = re.sub(r"[-_,]", " ", string)
+    numbers_search = string.translate(str.maketrans("-_,", "   "))
 
     # remove any duplicate spaces
     numbers_search = remove_dual_space(numbers_search).strip()
@@ -1688,12 +1698,17 @@ def get_release_number(file, chapter=False):
         # Removes the - characters.extension from the end of the string, with
         # the dash and characters being optional
         # EX:  - prologue.extension or .extension
-        name = re.sub(
-            r"(((\s+)?-(\s+)?([A-Za-z]+))?(%s))" % file_extensions_regex,
-            "",
-            name,
-            re.IGNORECASE,
-        ).strip()
+        name_extension = get_file_extension(name)
+        if name_extension in file_extensions:
+            if "-" in name:
+                name = re.sub(
+                    r"(((\s+)?-(\s+)?([A-Za-z]+))?(%s))" % file_extensions_regex,
+                    "",
+                    name,
+                    re.IGNORECASE,
+                ).strip()
+            else:
+                name = name.replace(name_extension, "").strip()
 
         if "-" in name:
             # - #404 - -> #404
@@ -1727,13 +1742,13 @@ def get_release_number(file, chapter=False):
     if not chapter:  # Search for a volume number
         result = volume_number_search_pattern.search(file)
     else:  # Prep for a chapter search
-        if has_multiple_numbers(file):
+        if has_multiple_numbers(file) and ("-" in file or "#" in file):
             extension_less_file = get_extensionless_name(file)
 
             if chapter_number_search_pattern.search(extension_less_file):
                 file = chapter_number_search_pattern.sub("", extension_less_file)
 
-                # remove - at the end of the string
+                # Remove - at the end of the string
                 if file.endswith("-") and not re.search(
                     r"-(\s+)?(#)?([0-9]+)(([-_.])([0-9]+)|)+(x[0-9]+)?(\s+)?-", file
                 ):
@@ -1840,6 +1855,9 @@ def get_release_number_cache(file, chapter=False):
 def get_title_from_description(description):
     search = re.search(
         r"(^([\"\“]?[A-Z]+([0-9]+|[^A-Za-z0-9]+)([0-9]+)?)+)", description
+    ) or re.search(
+        r"^([A-Z0-9 ,.\(\)\{\}\[\]\'\"\“\”\’\-:;!?]+?(?:[.!?](?=\s*[A-Z])|(?=\s*[A-Z][a-z])))",
+        description,
     )
 
     if not search:
@@ -1860,7 +1878,9 @@ def get_title_from_description(description):
     search = re.sub(r"([A-Z])(\.$)", r"\1", search).strip()
 
     # remove any ending characters that have punctuation before them
-    search = re.sub(r"(?<=[^\w\s,/])([A-Za-z])$", "", search).strip()
+    search = re.sub(
+        r"(?<=[^\w\s,/])([A-Za-z])[0-9 ,.\(\)\{\}\[\]\'\"\“\”\’\-:;!?]*$", "", search
+    ).strip()
 
     if len(search) <= 3:
         return ""
@@ -1868,30 +1888,33 @@ def get_title_from_description(description):
     return search
 
 
-volume_year_regex = r"(\(|\[|\{)(\d{4})(\)|\]|\})"
-
-
 # Get the release year from the file metadata, if present, otherwise from the file name
 def get_release_year(name, metadata=None):
     result = None
 
-    match = re.search(volume_year_regex, name, re.IGNORECASE)
+    # Drop the bracketed year from the file name
+    match = volume_year_pattern.search(name)
     if match:
-        result = int(re.sub(r"(\(|\[|\{)|(\)|\]|\})", "", match.group()))
+        result = match.group()[1:-1]
 
+    # Check the internal metadata for a year if the file name didn't have one
     if not result and metadata:
         release_year_from_file = None
 
+        # Avoid the metadata year if there's no summary/description
+        # (likely a wrong year since there's no proper metadata)
         if "Summary" in metadata and "Year" in metadata:
             release_year_from_file = metadata["Year"]
         elif "dc:description" in metadata and "dc:date" in metadata:
             release_year_from_file = metadata["dc:date"].strip()
-            release_year_from_file = re.search(r"\d{4}", release_year_from_file)
-            release_year_from_file = (
-                release_year_from_file.group() if release_year_from_file else None
-            )
+            release_year_from_file = release_year_from_file.split("-")[0]
 
-        if release_year_from_file and release_year_from_file.isdigit():
+        if release_year_from_file and not (
+            len(release_year_from_file) == 4 and release_year_from_file.isdigit()
+        ):
+            release_year_from_file = None
+
+        if release_year_from_file:
             result = int(release_year_from_file)
             if result < 1950:
                 result = None
@@ -1960,9 +1983,17 @@ def starts_with_bracket(s):
     return s.startswith(("(", "[", "{"))
 
 
+# Determines if the string ends with a starting bracket
+def ends_with_starting_bracket(s):
+    return s.endswith(("(", "[", "{"))
+
+
 # Determines if the string ends with a bracket
 def ends_with_bracket(s):
     return s.endswith((")", "]", "}"))
+
+
+volume_year_pattern = re.compile(r"(\(|\[|\{)(\d{4})(\)|\]|\})")
 
 
 # check if volume file name is a chapter
@@ -1977,9 +2008,6 @@ def contains_chapter_keywords(file_name):
         if "_" in file_name_clean
         else file_name_clean
     )
-
-    # Remove "c1fi7"
-    file_name_clean = file_name_clean.replace("c1fi7", "")
 
     # Remove dual spaces
     file_name_clean = remove_dual_space(file_name_clean).strip()
@@ -2000,16 +2028,21 @@ def contains_chapter_keywords(file_name):
 
     if not found and not contains_volume_keywords(file_name):
         # Remove volume year
-        without_year = re.sub(volume_year_regex, "", file_name, flags=re.IGNORECASE)
+        without_year = volume_year_pattern.sub("", file_name)
+        chapter_numbers_found = None
 
         # Remove any 2000-2999 numbers at the end
-        without_year = re.sub(r"\b(?:2\d{3})\b$", "", without_year, flags=re.IGNORECASE)
+        if any(map(str.isdigit, without_year)):
+            without_year = re.sub(
+                r"\b(?:2\d{3})\b$", "", without_year, flags=re.IGNORECASE
+            )
 
-        # Check for chapter numbers
-        chapter_numbers_found = re.search(
-            r"(?<!^)(?<!\d\.)\b([0-9]+)(([-_.])([0-9]+)|)+(x[0-9]+)?(#([0-9]+)(([-_.])([0-9]+)|)+)?(\.\d+)?\b",
-            without_year,
-        )
+            # Check for chapter numbers
+            chapter_numbers_found = re.search(
+                r"(?<!^)(?<!\d\.)\b([0-9]+)(([-_.])([0-9]+)|)+(x[0-9]+)?(#([0-9]+)(([-_.])([0-9]+)|)+)?(\.\d+)?\b",
+                without_year,
+            )
+
         if chapter_numbers_found:
             found = True
 
@@ -2389,6 +2422,11 @@ def check_description_match(file_descriptions, extracted_title, series_name=None
     if clean_extracted_title in titles_only:
         return True
 
+    # Don't attempt a description match if the extracted title is only one word
+    # Doing so is far too likely to create false positives.
+    if len(clean_extracted_title.split()) == 1:
+        return False
+
     # Attempt a comment match
     for desc in file_descriptions:
         if desc.type == "title":
@@ -2581,7 +2619,8 @@ def search_google_books(
 
             # Get the subtitle
             subtitle_search = item.get("volumeInfo", {}).get("subtitle", "")
-            if subtitle_search:
+
+            if subtitle_search and not subtitle_search.lower().startswith("volume"):
                 # Unidecode the subtitle
                 subtitle = unidecode(subtitle_search)
 
@@ -2599,7 +2638,7 @@ def search_google_books(
                         subtitle.strip(),
                         re.IGNORECASE,
                     ).strip()
-                
+
                 # Titlecase the subtitle
                 subtitle = titlecase(subtitle)
 
@@ -4205,8 +4244,11 @@ def compare_metadata(book, epub_path, files):
         if (
             book.title
             and not book.title.lower().startswith("volume")
-            and check_description_match(
-                file_descriptions, book.title, volume.series_name
+            and (
+                book.title.lower() in volume.series_name.lower()
+                or check_description_match(
+                    file_descriptions, book.title, volume.series_name
+                )
             )
         ):
             volume_keyword = "Volumes" if isinstance(book.volume, list) else "Volume"
@@ -7696,22 +7738,6 @@ def compress_image(image_path, quality=60, to_jpg=False, raw_data=None):
     return new_filename if not raw_data else buffer.getvalue()
 
 
-# Regular expressions to match cover patterns
-cover_patterns = [
-    r"(cover\.([A-Za-z]+))$",
-    r"(\b(Cover([0-9]+|)|CoverDesign|page([-_. ]+)?cover)\b)",
-    r"(\b(p000|page_000)\b)",
-    r"((\s+)0+\.(.{2,}))",
-    r"(\bindex[-_. ]1[-_. ]1\b)",
-    r"(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})",
-]
-
-# Pre-compiled regular expressions for cover patterns
-compiled_cover_patterns = [
-    re.compile(pattern, flags=re.IGNORECASE) for pattern in cover_patterns
-]
-
-
 # Finds and extracts the internal cover from a manga or novel file.
 def find_and_extract_cover(
     file,
@@ -7719,17 +7745,15 @@ def find_and_extract_cover(
     silent=False,
 ):
     # Helper function to filter and sort files in the zip archive
-    def filter_and_sort_files(zip_list):
-        return sorted(
-            [
-                x
-                for x in zip_list
-                if not x.endswith("/")
-                and "." in x
-                and get_file_extension(x) in image_extensions
-                and not os.path.basename(x).startswith((".", "__"))
-            ]
-        )
+    def filter_files(zip_list):
+        return [
+            x
+            for x in zip_list
+            if not x.endswith("/")
+            and "." in x
+            and get_file_extension(x) in image_extensions
+            and not os.path.basename(x).startswith((".", "__"))
+        ]
 
     # Helper function to read image data from the zip file
     def get_image_data(image_path):
@@ -7781,7 +7805,8 @@ def find_and_extract_cover(
     # Open the zip file
     with zipfile.ZipFile(file.path, "r") as zip_ref:
         # Filter and sort files in the zip archive
-        zip_list = filter_and_sort_files(zip_ref.namelist())
+        zip_list = filter_files(zip_ref.namelist())
+        zip_list = sorted(zip_list)
 
         # Move the novel cover to the front of the list, if it exists
         if novel_cover_path:
@@ -7796,14 +7821,15 @@ def find_and_extract_cover(
         blank_images = set()
 
         # Iterate through the files in the zip archive
-        for image_file in zip_list:
+        for pattern in compiled_cover_patterns:
             # Check if the file matches any cover pattern
-            for pattern in compiled_cover_patterns:
+            for image_file in zip_list:
                 image_basename = os.path.basename(image_file)
                 is_novel_cover = novel_cover_path and image_basename == novel_cover_path
 
                 if (
                     is_novel_cover
+                    or file.extension in manga_extensions
                     or pattern.pattern == image_basename
                     or pattern.search(image_basename)
                 ):
@@ -8237,6 +8263,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     series_subtitles = [
                         x.subtitle for x in session_result.api_results if x.subtitle
                     ]
+
                     if series_subtitles:
                         # only keep the subtitles that have a count of 2 or more
                         series_subtitles = [
@@ -10009,10 +10036,14 @@ if __name__ == "__main__":
                                     print(f"File Title: {title}")
                                     can_continue = True
 
-                                if data.issue != volume.index_number:
+                                if data.issue != (
+                                    volume.index_number
+                                    if not isinstance(volume.index_number, list)
+                                    else volume.index_number[0]
+                                ):
                                     print(f"Data Issue: {data.issue}")
                                     print(
-                                        f"File Issue: {volume.index_number if not volume.multi_volume else volume.index_number[0]}"
+                                        f"File Issue: {volume.index_number if not isinstance(volume.index_number, list) else volume.index_number[0]}"
                                     )
                                     can_continue = True
 
