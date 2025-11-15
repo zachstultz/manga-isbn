@@ -2365,16 +2365,47 @@ def get_extensionless_name(file):
     return os.path.splitext(file)[0]
 
 
-# only print the difference betwen the two strings
-def print_diff(s1, s2):
-    seq_matcher = dl.SequenceMatcher(None, s1, s2)
-    print(f"\n\t{'-'*13}Summary Differences{'-'*13}")
-    for tag, i1, i2, j1, j2 in seq_matcher.get_opcodes():
-        print(
-            f"\t\t{tag:7} s1[{i1}:{i2}] --> s2[{j1}:{j2}] {s1[i1:i2]!r:>6} --> {s2[j1:j2]!r}\n"
-        )
-    print(f"\t{'-'*47}")
+# Prints the difference betwen the two strings
+def print_diff(old, new):
+    if old == new:
+        return
 
+    # ANSI Escape Codes for Text and Background
+    # 31=Red Text, 41=Red Background
+    # 32=Green Text, 42=Green Background
+    
+    # Text in **Red on Red Background** (for deletions)
+    RED_BG = "\033[31m\033[41m" 
+    # Text in **Green on Green Background** (for insertions)
+    GREEN_BG = "\033[32m\033[42m" 
+    # Reset all formatting
+    END = "\033[0m"
+
+    matcher = dl.SequenceMatcher(None, old, new)
+    result = []
+
+    print(f"\n\t{'-'*13}Summary Differences{'-'*13}")
+    print(f"\t{old}\n")
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            # Equal parts remain unhighlighted
+            result.append(new[j1:j2])
+        elif tag == "delete":
+            # Deletion: Highlight in Red Background
+            result.append(f"{RED_BG}{old[i1:i2]}{END}")
+        elif tag == "insert":
+            # Insertion: Highlight in Green Background
+            result.append(f"{GREEN_BG}{new[j1:j2]}{END}")
+        elif tag == "replace":
+            # Replacement: Old part in Red Background, New part in Green Background
+            result.append(f"{RED_BG}{old[i1:i2]}{END}{GREEN_BG}{new[j1:j2]}{END}")
+
+    result_joined = "".join(result)
+
+    print(f"\t{result_joined}\n")
+    print(f"\t{new}\n")
+    print(f"\t{'-'*47}")
 
 # Converts an array of integers into a string containing each integer separated by a dash.
 def convert_array_to_string_with_dashes(array):
