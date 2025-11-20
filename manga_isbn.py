@@ -52,7 +52,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from settings import *
 
-script_version = (1, 1, 44)
+script_version = (1, 1, 45)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED INSTALLS =======
@@ -2367,17 +2367,17 @@ def get_extensionless_name(file):
 
 # Prints the difference betwen the two strings
 def print_diff(old, new):
-    if old == new:
+    if old == new or (not old and new):
         return
 
     # ANSI Escape Codes for Text and Background
     # 31=Red Text, 41=Red Background
     # 32=Green Text, 42=Green Background
-    
+
     # Text in **Red on Red Background** (for deletions)
-    RED_BG = "\033[31m\033[41m" 
+    RED_BG = "\033[31m\033[41m"
     # Text in **Green on Green Background** (for insertions)
-    GREEN_BG = "\033[32m\033[42m" 
+    GREEN_BG = "\033[32m\033[42m"
     # Reset all formatting
     END = "\033[0m"
 
@@ -2406,6 +2406,7 @@ def print_diff(old, new):
     print(f"\t{result_joined}\n")
     print(f"\t{new}\n")
     print(f"\t{'-'*47}")
+
 
 # Converts an array of integers into a string containing each integer separated by a dash.
 def convert_array_to_string_with_dashes(array):
@@ -9026,7 +9027,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     image_link_cache = []
 
                     send_message(
-                        f"\tHighest SSIM Score: {best_result.ssim_score} is less than the required score of {required_image_ssim_score}"
+                        f"\n\tHighest SSIM Score: {best_result.ssim_score} is less than the required score of {required_image_ssim_score}"
                     )
                     if best_result.image_link:
                         print(f"\tImage Link: {best_result.image_link}")
@@ -9426,6 +9427,9 @@ def process_file(volume, files, file_only=False):
             )
 
             if use_multi:
+                print(
+                    "\tUsing multi-threading to get file metadata from all directory files..."
+                )
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     results = executor.map(
                         get_file_metadata,
@@ -9447,6 +9451,9 @@ def process_file(volume, files, file_only=False):
                             )
             else:
                 for file in dir_files:
+                    if file.path not in cached_file_metadata:
+                        print(f"\tGetting file metadata from: {file.name}")
+
                     result = get_file_metadata(file.path)
                     if not result:
                         continue
