@@ -1871,18 +1871,21 @@ def get_title_from_description(description):
     # remove dual spaces
     search = remove_dual_space(search).strip()
 
-    # remove start and end quotes
+    # remove start and end single quotes
+    search = re.sub(r"^[\']|[\']$", "", search).strip()
+
+    # remove start and end double quotes
     search = re.sub(r"^[\"\“]|[\"\”]$", "", search).strip()
 
-    # remove ending period
-    search = re.sub(r"([A-Z])(\.$)", r"\1", search).strip()
+    # remove certain ending punctuation
+    search = re.sub(r"([A-Z])([\.,']$)", r"\1", search).strip()
 
     # remove any ending characters that have punctuation before them
     search = re.sub(
         r"(?<=[^\w\s,/])([A-Za-z])[0-9 ,.\(\)\{\}\[\]\'\"\“\”\’\-:;!?]*$", "", search
     ).strip()
 
-    if len(search) <= 3:
+    if len(search) < 4:
         return ""
 
     return search
@@ -2565,6 +2568,11 @@ def search_google_books(
             base_api_link = "https://www.googleapis.com/books/v1/volumes" + (
                 f"/{volume_id}" if volume_id else f"?q=isbn:{isbn}"
             )
+
+        if google_books_api_key:
+            # Use '?' if it's the first parameter, otherwise use '&'
+            separator = "?" if "?" not in base_api_link else "&"
+            base_api_link += f"{separator}key={google_books_api_key}"
 
         if not mute_output:
             print(f"Search: {base_api_link}")
