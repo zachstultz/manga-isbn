@@ -70,6 +70,9 @@ scrape_comic_vine = False
 # Comic Vine API Key
 comic_vine_api_key = ""
 
+# Google Books API Key
+google_books_api_key = ""
+
 # Skip non-volume ones
 skip_non_volume_ones = False
 
