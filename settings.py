@@ -59,7 +59,7 @@ scrape_google = True
 scrape_kobo = True
 
 # Scrape Bookwalker
-scrape_bookwalker = True
+scrape_bookwalker = False
 
 # Scrape Barnes and Noble
 scrape_barnes_and_noble = True
