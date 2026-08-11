@@ -24,6 +24,20 @@ from urllib.parse import urlparse
 
 import anilist
 import cv2
+
+try:
+    import pillow_jxl  # noqa: F401
+
+    jxl_plugin_available = True
+except ImportError:
+    jxl_plugin_available = False
+try:
+    import pillow_avif  # noqa: F401
+
+    avif_plugin_available = True
+except ImportError:
+    avif_plugin_available = False
+import filetype
 import langcodes
 import nltk
 import numpy as np
@@ -52,13 +66,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from settings import *
 
-script_version = (1, 1, 45)
+script_version = (1, 2, 0)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED INSTALLS =======
 # 1. WGET Install: sudo apt-get install wget -y
 # 2. Calibre Install: sudo apt-get install xdg-utils libxcb-cursor0 libxcb-xinerama0 -y && sudo apt-get install xz-utils -y && sudo apt-get install libopengl0 -y && sudo apt-get install libegl1 -y && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
-# 3. Misc (required for comictagger in requirements): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu
+# 3. Misc (required for comictagger in requirements): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu && sudo apt-get install unrar -y
 # 4. Chrome Install: sudo apt-get update && sudo apt install /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb -y
 # 5. PyQT5 Install: sudo apt-get install python3-pyqt5 -y
 # 6. Tesseract Install: sudo apt-get install tesseract-ocr -y
@@ -107,7 +121,7 @@ manga_extensions = [x for x in zip_extensions if x not in novel_extensions]
 file_extensions = novel_extensions + manga_extensions
 
 # All the accepted image extensions
-image_extensions = {".jpg", ".jpeg", ".png", ".tbn", ".webp"}
+image_extensions = {".jpg", ".jpeg", ".png", ".tbn", ".webp", ".jxl", ".avif"}
 
 # The internal extenions that will be checked when looking for the isbn
 # in an epub file.
@@ -4325,9 +4339,7 @@ def compare_metadata(book, epub_path, files):
                             "-t",
                         )
                     else:
-                        cbz_changes.append(
-                            "title=" + re.sub(r"([,=])", r"^\1", book.subtitle)
-                        )
+                        cbz_changes.append("title: " + yaml_quote(book.subtitle))
                         data_comparison.append(data.title)
             elif book.title and data.title != book.title:
                 updated = True
@@ -4336,7 +4348,7 @@ def compare_metadata(book, epub_path, files):
                         "ebook-meta", epub_path, data.title, book.title, "Title", "-t"
                     )
                 else:
-                    cbz_changes.append("title=" + re.sub(r"([,=])", r"^\1", book.title))
+                    cbz_changes.append("title: " + yaml_quote(book.title))
                     data_comparison.append(data.title)
         elif book.title and data.title != book.title:
             updated = True
@@ -4345,7 +4357,7 @@ def compare_metadata(book, epub_path, files):
                     "ebook-meta", epub_path, data.title, book.title, "Title", "-t"
                 )
             else:
-                cbz_changes.append("title=" + re.sub(r"([,=])", r"^\1", book.title))
+                cbz_changes.append("title: " + yaml_quote(book.title))
                 data_comparison.append(data.title)
 
         if not updated and only_update_if_new_title:
@@ -4374,9 +4386,7 @@ def compare_metadata(book, epub_path, files):
                     "-c",
                 )
             else:
-                cbz_changes.append(
-                    "comments=" + re.sub(r"([,=])", r"^\1", book.summary)
-                )
+                cbz_changes.append("description: " + yaml_quote(book.summary))
                 data_comparison.append(data.comments)
         if data.isbn != book.isbn and book.isbn != 0:
             if extension == ".epub":
@@ -4410,14 +4420,18 @@ def compare_metadata(book, epub_path, files):
                             str(convert_writers_object_to_string_array(data.credits))
                         )
                         cbz_changes.append(
-                            "credit=Writer:" + re.sub(r"([,=])", r"^\1", writer)
+                            "credits: [{role: Writer, person: "
+                            + yaml_quote(writer)
+                            + "}]"
                         )
                 else:
                     data_comparison.append(
                         str(convert_writers_object_to_string_array(data.credits))
                     )
                     cbz_changes.append(
-                        "credit=Writer:" + re.sub(r"([,=])", r"^\1", book.writer)
+                        "credits: [{role: Writer, person: "
+                        + yaml_quote(book.writer)
+                        + "}]"
                     )
         elif (
             extension == ".epub"
@@ -4465,13 +4479,13 @@ def compare_metadata(book, epub_path, files):
                 )
             else:
                 if book.year != data.year:
-                    cbz_changes.append(f"year={book.year}")
+                    cbz_changes.append(f"year: {book.year}")
                     data_comparison.append(str(data.year))
                 if book.month != data.month:
-                    cbz_changes.append(f"month={book.month}")
+                    cbz_changes.append(f"month: {book.month}")
                     data_comparison.append(str(data.month))
                 if book.day != data.day:
-                    cbz_changes.append(f"day={book.day}")
+                    cbz_changes.append(f"day: {book.day}")
                     data_comparison.append(str(data.day))
 
         if data.languages != book.language:
@@ -4485,9 +4499,7 @@ def compare_metadata(book, epub_path, files):
                     "-l",
                 )
             else:
-                cbz_changes.append(
-                    "language=" + re.sub(r"([,=])", r"^\1", book.language)
-                )
+                cbz_changes.append("language: " + yaml_quote(book.language))
                 data_comparison.append(data.languages)
         if (
             book.publisher
@@ -4504,9 +4516,7 @@ def compare_metadata(book, epub_path, files):
                     "-p",
                 )
             else:
-                cbz_changes.append(
-                    "publisher=" + re.sub(r"([,=])", r"^\1", book.publisher)
-                )
+                cbz_changes.append("publisher: " + yaml_quote(book.publisher))
                 data_comparison.append(data.publisher)
 
         if book.series != data.series:
@@ -4520,7 +4530,7 @@ def compare_metadata(book, epub_path, files):
                     "--series",
                 )
             else:
-                cbz_changes.append("series=" + re.sub(r"([,=])", r"^\1", book.series))
+                cbz_changes.append("series: " + yaml_quote(book.series))
                 data_comparison.append(data.series)
 
         updated = False
@@ -4558,9 +4568,9 @@ def compare_metadata(book, epub_path, files):
                 )
         if extension == ".cbz" and data.issue != book.number:
             if not issue_string:
-                cbz_changes.append(f"issue={book.number}")
+                cbz_changes.append(f"issue: {yaml_quote(book.number)}")
             else:
-                cbz_changes.append(f"issue={issue_string}")
+                cbz_changes.append(f"issue: {yaml_quote(issue_string)}")
             data_comparison.append(data.issue)
         if (
             extension == ".cbz"
@@ -4568,7 +4578,7 @@ def compare_metadata(book, epub_path, files):
             and book.volume_count
             and data.volume_count != book.volume_count
         ):
-            cbz_changes.append(f"issue_count={book.volume_count}")
+            cbz_changes.append(f"issue_count: {book.volume_count}")
             data_comparison.append(data.volume_count)
         if data.average_rating != book.average_rating and book.average_rating:
             if extension == ".epub":
@@ -4604,8 +4614,7 @@ def compare_metadata(book, epub_path, files):
                     )
                 else:
                     cbz_changes.append(
-                        "genre="
-                        + re.sub(r"([,=])", r"^\1", list_to_string(book.genres))
+                        "genres: " + yaml_quote(list_to_string(book.genres))
                     )
                     data_comparison.append(list_to_string(data.genres))
             if data.tags != book.tags:
@@ -4624,21 +4633,15 @@ def compare_metadata(book, epub_path, files):
             and data.maturity_rating != "M"
             and extension == ".cbz"
         ):
-            cbz_changes.append("maturity_rating=M")
+            cbz_changes.append("maturity_rating: M")
             data_comparison.append(data.maturity_rating)
         if extension == ".cbz":
             if data.api_link != book.api_link:
-                cbz_changes.append(
-                    "web_link=" + re.sub(r"([,=])", r"^\1", book.api_link)
-                )
+                cbz_changes.append("web_links: " + yaml_quote(book.api_link))
                 data_comparison.append(data.api_link)
-            custom_note = re.sub(
-                r"([,=])",
-                r"^\1",
-                f"Tagged on {datetime.now().date()}",
-            )
+            custom_note = f"Tagged on {datetime.now().date()}"
             if cbz_changes and data.notes != custom_note:
-                cbz_changes.append(f"notes={custom_note}")
+                cbz_changes.append(f"notes: {yaml_quote(custom_note)}")
                 data_comparison.append(data.notes)
 
         if cbz_changes and data_comparison:
@@ -4733,6 +4736,20 @@ def compare_metadata(book, epub_path, files):
     print(f"{'-' * 80}")
 
 
+def yaml_quote(value):
+    """Quote a value for use in ComicTagger 1.6.0+ YAML metadata syntax.
+
+    ComicTagger 1.6.0 changed the -m/--metadata flag to use YAML syntax:
+      "series: 'Plastic Man', publisher: 'Quality Comics', year: 1941"
+    Values are single-quoted so YAML treats string values (like issue numbers) as strings.
+    Internal single quotes in the value are escaped by doubling them.
+    """
+    if value is None:
+        return "''"
+    value_str = str(value).replace("'", "''")
+    return f"'{value_str}'"
+
+
 def update_metadata(
     command,
     epub_path,
@@ -4761,19 +4778,26 @@ def update_metadata(
                 book_num = str(book_num)
 
         elif cbz and (len(data_num) == len(book_num)):
-            count = len(data_num)
-            for num in range(count):
-                y_clean = re.sub(r"(\^)([,=])", r"\2", book_num[num])
-                y_clean = y_clean.split("=", 1)
-                old_value = data_num[num]
-                print(
-                    ("\tUpdating" if y_clean[0] != "credit" else "\tAdding")
-                    + f" {y_clean[0].capitalize()}: "
-                )
-                print(f"\t\tFrom: {old_value}\n\t\tTo: {y_clean[1]}")
+            if not skip_print:
+                count = len(data_num)
+                for num in range(count):
+                    y_clean = book_num[num].split(": ", 1)
+                    old_value = data_num[num]
+                    print(
+                        (
+                            "\tUpdating"
+                            if y_clean[0].strip() != "credits"
+                            else "\tAdding"
+                        )
+                        + f" {y_clean[0].strip().capitalize()}: "
+                    )
+                    print(
+                        f"\t\tFrom: {old_value}\n\t\tTo: {y_clean[1] if len(y_clean) > 1 else ''}"
+                    )
         else:
-            print(f"\tUpdating {item_title}: ")
-            print(f"\t\tFrom: {data_num}\n\t\tTo: {book_num}")
+            if not skip_print:
+                print(f"\tUpdating {item_title}: ")
+                print(f"\t\tFrom: {data_num}\n\t\tTo: {book_num}")
 
         combined = ", ".join(book_num) if cbz else book_num
         command = command.split(" ")
@@ -4836,6 +4860,54 @@ def update_metadata(
     except Exception as e:
         send_message(f"Error updating metadata: {e}", error=True)
         write_to_file("isbn_script_errors.txt", str(e))
+
+
+# Decodes raw image bytes into a BGR/BGRA numpy array. Tries OpenCV first,
+# and falls back to Pillow for formats OpenCV can't decode (e.g. .jxl), since
+# cv2.imdecode() returns None instead of raising on unsupported formats,
+# which otherwise crashes downstream code with confusing errors like
+# "'NoneType' object has no attribute 'shape'".
+def decode_image_bytes(data, silent=False):
+    image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is not None:
+        return image
+
+    try:
+        pil_image = Image.open(io.BytesIO(data))
+        pil_image.load()
+
+        if pil_image.mode == "RGBA":
+            image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGBA2BGRA)
+        elif pil_image.mode == "RGB":
+            image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        else:
+            image = cv2.cvtColor(np.array(pil_image.convert("RGB")), cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        if not silent:
+            hint = (
+                " (pillow-jxl-plugin is not installed: run"
+                " `pip install pillow-jxl-plugin` to enable .jxl support)"
+                if not jxl_plugin_available
+                else ""
+            )
+            send_message(
+                f"Failed to decode image data (Pillow fallback): {e}{hint}",
+                error=True,
+            )
+        return None
+
+    return image
+
+
+# Same as decode_image_bytes(), but for an image file already on disk.
+def decode_image_path(path, silent=False):
+    image = cv2.imread(path)
+    if image is not None:
+        return image
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return decode_image_bytes(f.read(), silent=silent)
 
 
 # Preps the image for comparison
@@ -5214,13 +5286,13 @@ def parse_manga_meta(metadata_text):
             key = key.strip()
             value = value.strip()
 
-            # If the key is "credit", add the value to the credits list
-            if key.lower() == "credit":
+            # If the key is "credit" or "credits", add the value to the credits list
+            if key.lower() in ["credit", "credits"]:
                 current_key = key
                 credits.append(value)
             else:
                 # If there is a current key, store its value in metadata
-                if current_key:
+                if current_key and current_key.lower() not in ["credit", "credits"]:
                     metadata[current_key] = metadata[current_key].strip()
 
                 # Set the new current key and store its initial value
@@ -5229,13 +5301,13 @@ def parse_manga_meta(metadata_text):
         else:
             if current_key:
                 # If no colon is found, add the line to the current key's value
-                if current_key != "credit":
+                if current_key.lower() not in ["credit", "credits"]:
                     metadata[current_key] += f" {line.strip()}"
                 else:
                     credits[-1] += f" {line.strip()}"
 
     # Store the last key's value in metadata
-    if current_key and current_key != "credit":
+    if current_key and current_key.lower() not in ["credit", "credits"]:
         metadata[current_key] = metadata[current_key].strip()
 
     # Add the credits list to metadata
@@ -5277,10 +5349,12 @@ def get_cbz_metadata(path):
     month = data.get("month", "")
     day = data.get("day", "")
     volume = data.get("volume", "")
-    web_link = ""
+    web_link = data.get("web_link", "") or data.get("web_links", "")
+    if isinstance(web_link, str):
+        web_link = web_link.strip("[]'\" ")
     scan_info = data.get("scan_info", "")
     characters = data.get("characters", "")
-    comments = data.get("comments", "")
+    comments = data.get("comments", "") or data.get("description", "")
     notes = data.get("notes", "")
     credits = data.get("credits", "")
     languages = data.get("language", "")
@@ -5290,7 +5364,7 @@ def get_cbz_metadata(path):
     average_rating = data.get("average_rating", "")
     critical_rating = data.get("critical_rating", "")
     teams = data.get("teams", "")
-    genres = data.get("genre", [])
+    genres = data.get("genre", []) or data.get("genres", [])
     tags = data.get("tags", [])
     volume_count = data.get("issue_count", 0)
 
@@ -5378,8 +5452,8 @@ def get_cbz_metadata(path):
         isbn = re.search(rf"{isbn_13_regex}", zip_comment, re.IGNORECASE)
         isbn = re.sub(r"[^0-9]", "", isbn.group()) if isbn else ""
 
-    if data.get("web_link", ""):
-        api_link = data.get("web_link", "")
+    if web_link:
+        api_link = web_link
 
     # Create a CBZTags object and return it
     return CBZTags(
@@ -5705,12 +5779,14 @@ def get_search_keyword(s):
 def process_image_link_temp_for_anilist(cover_path, link):
     try:
         # read the images
-        cover_image = cv2.imread(cover_path)
+        cover_image = decode_image_path(cover_path)
 
         # download online image
-        online_image = requests.get(link).content
-        online_image = Image.open(io.BytesIO(online_image))
-        online_image = np.array(online_image)
+        online_image_data = requests.get(link).content
+        online_image = decode_image_bytes(online_image_data)
+
+        if cover_image is None or online_image is None:
+            raise ValueError("Failed to decode one or both images for comparison.")
 
         # if the images aren't the same size, resize them
         if online_image.shape[0] > cover_image.shape[0]:
@@ -5754,10 +5830,10 @@ def process_image_link(
     global image_link_cache
 
     def load_image_from_bytes(image_data):
-        return np.array(Image.open(io.BytesIO(image_data)))
+        return decode_image_bytes(image_data)
 
     def load_image_from_path(path):
-        return cv2.imread(path)
+        return decode_image_path(path)
 
     def fetch_online_image(url, provider_name):
         fetch_headers = {
@@ -5867,6 +5943,13 @@ def process_image_link(
             return None
 
     online_image = load_image_from_bytes(online_image_data)
+
+    if cover_image is None or online_image is None:
+        send_message(
+            f"Failed to decode cover or online image for comparison: {link}",
+            error=True,
+        )
+        return None
 
     # Resize images to the smaller of the two
     online_image, cover_image = resize_images(online_image, cover_image)
@@ -7739,7 +7822,18 @@ def compress_image(image_path, quality=60, to_jpg=False, raw_data=None):
     save_format = "JPEG"
 
     # Load the image from the file or raw data
-    image = Image.open(image_path if not raw_data else io.BytesIO(raw_data))
+    try:
+        image = Image.open(image_path if not raw_data else io.BytesIO(raw_data))
+        image.load()
+    except Exception as e:
+        hint = (
+            " (pillow-jxl-plugin is not installed: run"
+            " `pip install pillow-jxl-plugin` to enable .jxl support)"
+            if not jxl_plugin_available and get_file_extension(image_path) == ".jxl"
+            else ""
+        )
+        send_message(f"Failed to open image {image_path}: {e}{hint}", error=True)
+        return None if raw_data else image_path
 
     # Convert the image to RGB if it has an alpha channel or uses a palette
     if image.mode in ("RGBA", "P"):
@@ -7749,6 +7843,10 @@ def compress_image(image_path, quality=60, to_jpg=False, raw_data=None):
 
     if ext == ".webp":
         save_format = "WEBP"
+    elif ext == ".avif":
+        save_format = "AVIF"
+    elif ext == ".jxl":
+        save_format = "JXL"
 
     # Determine the new filename for the compressed image
     if not raw_data:
@@ -7811,20 +7909,42 @@ def find_and_extract_cover(
         if image_extension == ".jpeg":
             image_extension = ".jpg"
 
-        if output_covers_as_webp and image_extension != ".webp":
+        # True when the on-disk format actually needs to change (e.g. the
+        # source is .jxl but we want .webp on disk). In that case the bytes
+        # MUST be re-encoded via compress_image(), not just written as-is
+        # under the new extension, or the file's content won't match its
+        # extension and nothing will be able to open it later.
+        converting_format = output_covers_as_webp and image_extension != ".webp"
+        if converting_format:
             image_extension = ".webp"
 
         output_path = os.path.join(file.root, file.extensionless_name + image_extension)
+        needs_recompression = converting_format or compress_image_option
 
         if not return_data_only:
+            if needs_recompression:
+                converted_data = compress_image(
+                    output_path, image_quality, raw_data=image_data
+                )
+                if converted_data:
+                    save_image_data(output_path, converted_data)
+                    return output_path
+                if converting_format:
+                    # Conversion was required but failed; don't leave a
+                    # mislabeled file (e.g. raw .jxl bytes saved as .webp).
+                    return None
             save_image_data(output_path, image_data)
-            if compress_image_option:
-                result = compress_image(output_path, image_quality)
-                return result if result else output_path
             return output_path
         elif image_data:
-            compressed_data = compress_image(output_path, raw_data=image_data)
-            return compressed_data if compressed_data else image_data
+            if needs_recompression:
+                compressed_data = compress_image(
+                    output_path, image_quality, raw_data=image_data
+                )
+                if compressed_data:
+                    return compressed_data
+                if converting_format:
+                    return None
+            return image_data
         return None
 
     # Check if the file exists
@@ -10034,6 +10154,20 @@ if __name__ == "__main__":
                         print(f"File: {volume.name}")
                         print("-" * 80)
 
+                        if skip_volumes_older_than_x_time and os.path.isfile(
+                            volume.path
+                        ):
+                            if (
+                                get_modiciation_age(volume.path)
+                                >= skip_volumes_older_than_x_time
+                                and get_creation_age(volume.path)
+                                >= skip_volumes_older_than_x_time
+                            ):
+                                print(
+                                    f"\tSkipping {volume.name} because it is older than {skip_volumes_older_than_x_time} minutes"
+                                )
+                                continue
+
                         if skip_if_has_metadata:
                             # Check if ComicInfo.xml exists and skip if it does
                             comic_info_contents = get_comic_info_xml(volume.path)
@@ -10070,7 +10204,6 @@ if __name__ == "__main__":
                                 title += f" Part {volume.volume_part}"
 
                         if title:
-                            print(f"Title: {title}")
                             # Get metadata from CBZ file
                             data = get_cbz_metadata(volume.path)
 
@@ -10078,34 +10211,50 @@ if __name__ == "__main__":
                                 can_continue = False
 
                                 if data.title != title:
-                                    print(f"Data Title: {data.title}")
-                                    print(f"File Title: {title}")
+                                    print(f"Old Title: {data.title}")
+                                    print(f"New Title: {title}")
                                     can_continue = True
+                                else:
+                                    print(f"Title: {title}")
 
                                 if data.issue != (
                                     volume.index_number
                                     if not isinstance(volume.index_number, list)
                                     else volume.index_number[0]
                                 ):
-                                    print(f"Data Issue: {data.issue}")
+                                    print(f"\nOld Issue: {data.issue}")
                                     print(
-                                        f"File Issue: {volume.index_number if not isinstance(volume.index_number, list) else volume.index_number[0]}"
+                                        f"New Issue: {volume.index_number if not isinstance(volume.index_number, list) else volume.index_number[0]}"
                                     )
                                     can_continue = True
 
                                 if not can_continue:
                                     continue  # Skip this iteration if no mismatches found
 
-                                formatted_title = re.sub(r"([,=])", r"^\1", title)
+                                data_comp = []
+                                cbz_comp = []
+                                if data.title != title:
+                                    data_comp.append(data.title)
+                                    cbz_comp.append(f"title: {yaml_quote(title)}")
+                                if data.issue != (
+                                    volume.index_number
+                                    if not isinstance(volume.index_number, list)
+                                    else volume.index_number[0]
+                                ):
+                                    issue_val = (
+                                        volume.index_number
+                                        if not isinstance(volume.index_number, list)
+                                        else volume.index_number[0]
+                                    )
+                                    data_comp.append(data.issue)
+                                    cbz_comp.append(f"issue: {yaml_quote(issue_val)}")
 
                                 # Update metadata using ComicTagger
                                 update_metadata(
                                     "comictagger",
                                     volume.path,
-                                    [data.title, data.issue],
-                                    [
-                                        f"title={formatted_title}, issue={volume.index_number if not volume.multi_volume else volume.index_number[0]}"
-                                    ],
+                                    data_comp,
+                                    cbz_comp,
                                     "CBZ Archive",
                                     "-s -t cr -m",
                                     skip_print=manualmetadata == False,
