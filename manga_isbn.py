@@ -4478,15 +4478,23 @@ def compare_metadata(book, epub_path, files):
                     "-d",
                 )
             else:
-                if book.year != data.year:
-                    cbz_changes.append(f"year: {book.year}")
-                    data_comparison.append(str(data.year))
-                if book.month != data.month:
-                    cbz_changes.append(f"month: {book.month}")
-                    data_comparison.append(str(data.month))
-                if book.day != data.day:
-                    cbz_changes.append(f"day: {book.day}")
-                    data_comparison.append(str(data.day))
+                book_year = clean_int_str(book.year)
+                data_year = clean_int_str(data.year)
+                if book_year and book_year != data_year:
+                    cbz_changes.append(f"year: {book_year}")
+                    data_comparison.append(data_year)
+
+                book_month = clean_int_str(book.month)
+                data_month = clean_int_str(data.month)
+                if book_month and book_month != data_month:
+                    cbz_changes.append(f"month: {book_month}")
+                    data_comparison.append(data_month)
+
+                book_day = clean_int_str(book.day)
+                data_day = clean_int_str(data.day)
+                if book_day and book_day != data_day:
+                    cbz_changes.append(f"day: {book_day}")
+                    data_comparison.append(data_day)
 
         if data.languages != book.language:
             if extension == ".epub":
@@ -4734,6 +4742,15 @@ def compare_metadata(book, epub_path, files):
         send_message(f"Error in metadata comparison: {e}", error=True)
         write_to_file("isbn_script_errors.txt", str(e))
     print(f"{'-' * 80}")
+
+
+def clean_int_str(val):
+    if val is None:
+        return ""
+    val_str = str(val).strip()
+    if val_str.isdigit():
+        return str(int(val_str))
+    return val_str
 
 
 def yaml_quote(value):
