@@ -49,8 +49,10 @@ joblib==1.5.3
 Js2Py==0.74
 langcodes==3.5.1
 langdetect==1.0.9
+language_data==1.4.0
 lazy-loader==0.5
 lxml==6.1.1
+marisa-trie==1.4.1
 metron-tagger==4.14.0
 mokkari==4.4.0
 multidict==6.7.1
