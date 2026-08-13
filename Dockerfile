@@ -34,7 +34,9 @@ RUN apt-get install -y wget
 RUN apt-get install -y xdg-utils libxcb-cursor0 libxcb-xinerama0 xz-utils libopengl0 libegl1
 RUN wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sh /dev/stdin
 RUN apt-get install -y libicu-dev pkg-config python3-icu
-RUN apt-get install -y /app/chrome/google-chrome-stable_current_amd64.deb
+RUN wget -q -P /app/chrome/ https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get install -y /app/chrome/google-chrome-stable_current_amd64.deb \
+    && rm /app/chrome/google-chrome-stable_current_amd64.deb
 RUN apt-get install -y python3-pyqt5
 RUN apt-get -y install tesseract-ocr
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
