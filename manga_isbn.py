@@ -4660,7 +4660,6 @@ def compare_metadata(book, epub_path, files):
                 cbz_changes,
                 "CBZ Archive",
                 "-s -t cr -m",
-                skip_print=True,
                 cbz=True,
             )
         if zip_comments_to_be_written:
