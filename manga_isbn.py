@@ -73,7 +73,7 @@ script_version_text = "v{}.{}.{}".format(*script_version)
 # 1. WGET Install: sudo apt-get install wget -y
 # 2. Calibre Install: sudo apt-get install xdg-utils libxcb-cursor0 libxcb-xinerama0 -y && sudo apt-get install xz-utils -y && sudo apt-get install libopengl0 -y && sudo apt-get install libegl1 -y && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
 # 3. Misc (required for comictagger in requirements): sudo apt-get install libicu-dev -y && sudo apt-get install pkg-config -y && sudo apt-get install python3-icu && sudo apt-get install unrar -y
-# 4. Chrome Install: sudo apt-get update && sudo apt install /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb -y
+# 4. Chrome Install: wget -q -P /scripts/komga-cover-extractor/addons/manga_isbn/chrome/ https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo apt-get update && sudo apt install -y /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb && rm /scripts/komga-cover-extractor/addons/manga_isbn/chrome/google-chrome-stable_current_amd64.deb
 # 5. PyQT5 Install: sudo apt-get install python3-pyqt5 -y
 # 6. Tesseract Install: sudo apt-get install tesseract-ocr -y
 # 7. Requirements Install: pip3 install -r /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/requirements.txt
@@ -579,6 +579,11 @@ def image_arg_parser():
     parser.add_argument(
         "--manual_series_id_mode",
         help="If enabled, the program will ask the user to submit a series_id for scraping.",
+        required=False,
+    )
+    parser.add_argument(
+        "--manual_pick_mode",
+        help="If enabled, the program will ask the user to pick the correct result from the search results.",
         required=False,
     )
     parser.add_argument(
@@ -4630,9 +4635,7 @@ def compare_metadata(book, epub_path, files):
                     pass
                 else:
                     pass
-                    # cbz_changes.append(
-                    #     "tag=" + re.sub(r"([,=])", r"^\1", list_to_string(book.tags))
-                    # )
+                    # cbz_changes.append("tags: " + yaml_quote(list_to_string(book.tags)))
                     # data_comparison.append(list_to_string(data.tags))
 
         if (
@@ -9044,6 +9047,32 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                 else:
                     series_id_w_matching_vol_to_ord_num = []
 
+                if manual_pick_mode and not passed:
+                    print("\n\t\tManual pick mode enabled.")
+                    for result in results_with_image_score:
+                        if passed:
+                            break
+                        
+                        print(f"\n\t\tSeries: {result.book.series}")
+                        print(f"\t\tVolume: {result.book.volume}")
+                        print(f"\t\tISBN: {result.book.isbn}")
+                        print(f"\t\tAPI Link: {result.book.api_link}")
+                        print(f"\t\tLink: {best_result.book.preview_link}")
+                        print(f"\t\tImage Link: {best_result.image_link}\n")
+
+                        # get the user input
+                        user_input = ""
+                        while user_input not in ["y", "n", "Y", "N"]:
+                            user_input = input("\t\tAccept this result? (y/n): ").lower()
+                            if user_input not in ["y", "n", "Y", "N"]:
+                                print("\t\t\tInvalid input. Please try again.")
+                            if user_input in ["y", "Y"]:
+                                best_result = result
+                                passed = True
+                                break
+                            else:
+                                continue
+
                 if passed:
                     if (
                         session_result
@@ -10048,6 +10077,9 @@ if __name__ == "__main__":
 
     if args.manual_series_id_mode:
         manual_series_id_mode = parse_bool_argument(args.manual_series_id_mode)
+
+    if args.manual_pick_mode:
+        manual_pick_mode = parse_bool_argument(args.manual_pick_mode)
 
     if args.allow_non_is_ebook_results:
         allow_non_is_ebook_results = parse_bool_argument(
