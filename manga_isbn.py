@@ -859,7 +859,7 @@ providers = [
         "google-books",
         scrape_google,
         1,
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Google_%22G%22_Logo.svg/1024px-Google_%22G%22_Logo.svg.png",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/960px-Google_%22G%22_logo.svg.png",
     ),
     Provider(
         "kobo",
@@ -893,7 +893,7 @@ cached_provider = Provider(
     "cached_series_id_results",
     True,
     1,
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Google_%22G%22_Logo.svg/1024px-Google_%22G%22_Logo.svg.png",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/960px-Google_%22G%22_logo.svg.png",
 )
 
 # order providers by priority, lowest number first
@@ -9048,11 +9048,13 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     series_id_w_matching_vol_to_ord_num = []
 
                 if manual_pick_mode and not passed:
+                    break_loop = False
+
                     print("\n\t\tManual pick mode enabled.")
                     for result in results_with_image_score:
-                        if passed:
+                        if passed or break_loop:
                             break
-                        
+
                         print(f"\n\t\tSeries: {result.book.series}")
                         print(f"\t\tVolume: {result.book.volume}")
                         print(f"\t\tISBN: {result.book.isbn}")
@@ -9062,13 +9064,18 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
 
                         # get the user input
                         user_input = ""
-                        while user_input not in ["y", "n", "Y", "N"]:
-                            user_input = input("\t\tAccept this result? (y/n): ").lower()
-                            if user_input not in ["y", "n", "Y", "N"]:
+                        while user_input not in ["y", "n", "nn"]:
+                            user_input = input(
+                                "\t\tAccept this result? (y/n/nn): "
+                            ).lower()
+                            if user_input not in ["y", "n", "nn"]:
                                 print("\t\t\tInvalid input. Please try again.")
-                            if user_input in ["y", "Y"]:
+                            if user_input in ["y"]:
                                 best_result = result
                                 passed = True
+                                break
+                            elif user_input in ["nn"]:
+                                break_loop = True
                                 break
                             else:
                                 continue
