@@ -132,3 +132,6 @@ mute_settings_output = False
 
 # Asks the user to submit a series_id for scraping
 manual_series_id_mode = False
+
+# Asks the user to pick the correct result from the search results
+manual_pick_mode = False
