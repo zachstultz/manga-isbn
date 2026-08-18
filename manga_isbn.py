@@ -9396,9 +9396,11 @@ def process_file(volume, files, file_only=False):
         return None
 
     if skip_volumes_older_than_x_time and os.path.isfile(volume.path):
+        modification_age = get_modiciation_age(volume.path)
+        creation_age = get_creation_age(volume.path)
         if (
-            get_modiciation_age(volume.path) >= skip_volumes_older_than_x_time
-            and get_creation_age(volume.path) >= skip_volumes_older_than_x_time
+            modification_age >= skip_volumes_older_than_x_time
+            and creation_age >= skip_volumes_older_than_x_time
         ):
             print(
                 f"\tSkipping {volume.name} because it is older than {skip_volumes_older_than_x_time} minutes"
