@@ -9051,6 +9051,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                     break_loop = False
 
                     print("\n\t\tManual pick mode enabled.")
+
                     for result in results_with_image_score:
                         if passed or break_loop:
                             break
@@ -9062,6 +9063,8 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         print(f"\t\tLink: {best_result.book.preview_link}")
                         print(f"\t\tImage Link: {best_result.image_link}\n")
 
+                        print(f"\n\t\tFile Name: {volume.name}\n")
+                        
                         # get the user input
                         user_input = ""
                         while user_input not in ["y", "n", "nn"]:
