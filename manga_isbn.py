@@ -9688,7 +9688,7 @@ def process_file(volume, files, file_only=False):
                 )
                 if result:
                     break
-                elif previous_provider.name == "google-books":
+                elif previous_provider.name == "google-books" and scrape_google:
                     if not result and (
                         not only_image_comparision or volume.extension == ".cbz"
                     ):
