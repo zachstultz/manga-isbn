@@ -24,19 +24,8 @@ from urllib.parse import urlparse
 
 import anilist
 import cv2
-
-try:
-    import pillow_jxl  # noqa: F401
-
-    jxl_plugin_available = True
-except ImportError:
-    jxl_plugin_available = False
-try:
-    import pillow_avif  # noqa: F401
-
-    avif_plugin_available = True
-except ImportError:
-    avif_plugin_available = False
+import pillow_jxl
+import pillow_avif
 import filetype
 import langcodes
 import nltk
@@ -321,6 +310,12 @@ successful_api_matches = []
 
 # Unsuccessful Google API matches
 unsuccessful_api_matches = []
+
+# Cache of ISBNs that have already been looked up against the Google Books API.
+# Key: isbn string, Value: the api_result returned for it (can be None for "no match").
+# This prevents the same ISBN from being searched against the API multiple times,
+# e.g. when it's found repeatedly while scanning a zip/epub's internal contents.
+isbn_api_lookup_cache = {}
 
 # EPUBs where we couldn't find an ISBN, but our second attempt was successful
 # The second attempt being an OCR on all the
@@ -1089,10 +1084,19 @@ def find_all_searches(extracted_texts, file):
                     ):
                         # Extract the ISBN from the text
                         text = re.sub(r"[^0-9]+", "", text, flags=re.IGNORECASE).strip()
+
+                        # Skip ISBNs we've already looked up against the API
+                        if text in isbn_api_lookup_cache:
+                            result = isbn_api_lookup_cache[text]
+                            if result:
+                                return result
+                            continue
+
                         print(f"\tFound ISBN: {text}")
                         print("\t\tChecking for google api result...\n")
                         # Check for Google API result
                         result = search_google_books(text, file)
+                        isbn_api_lookup_cache[text] = result
                         if result:
                             return result
     return None
@@ -1339,9 +1343,17 @@ def search_for_text(text, file):
             for t in result:
                 t = re.sub(r"[^0-9]", "", t).strip()
                 if len(t) == 13:
+                    # Skip ISBNs we've already looked up against the API
+                    if t in isbn_api_lookup_cache:
+                        api_result = isbn_api_lookup_cache[t]
+                        if api_result:
+                            return api_result
+                        continue
+
                     print(f"\tFound ISBN: {t}")
                     print("\t\tChecking google api result...\n")
                     api_result = search_google_books(t, file)
+                    isbn_api_lookup_cache[t] = api_result
                     if api_result:
                         return api_result
 
@@ -4903,14 +4915,8 @@ def decode_image_bytes(data, silent=False):
             image = cv2.cvtColor(np.array(pil_image.convert("RGB")), cv2.COLOR_RGB2BGR)
     except Exception as e:
         if not silent:
-            hint = (
-                " (pillow-jxl-plugin is not installed: run"
-                " `pip install pillow-jxl-plugin` to enable .jxl support)"
-                if not jxl_plugin_available
-                else ""
-            )
             send_message(
-                f"Failed to decode image data (Pillow fallback): {e}{hint}",
+                f"Failed to decode image data (Pillow fallback): {e}",
                 error=True,
             )
         return None
@@ -7845,13 +7851,7 @@ def compress_image(image_path, quality=60, to_jpg=False, raw_data=None):
         image = Image.open(image_path if not raw_data else io.BytesIO(raw_data))
         image.load()
     except Exception as e:
-        hint = (
-            " (pillow-jxl-plugin is not installed: run"
-            " `pip install pillow-jxl-plugin` to enable .jxl support)"
-            if not jxl_plugin_available and get_file_extension(image_path) == ".jxl"
-            else ""
-        )
-        send_message(f"Failed to open image {image_path}: {e}{hint}", error=True)
+        send_message(f"Failed to open image {image_path}: {e}", error=True)
         return None if raw_data else image_path
 
     # Convert the image to RGB if it has an alpha channel or uses a palette
@@ -9064,7 +9064,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         print(f"\t\tImage Link: {best_result.image_link}\n")
 
                         print(f"\n\t\tFile Name: {volume.name}\n")
-                        
+
                         # get the user input
                         user_input = ""
                         while user_input not in ["y", "n", "nn"]:
