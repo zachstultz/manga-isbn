@@ -67,6 +67,8 @@ script_version_text = "v{}.{}.{}".format(*script_version)
 # 6. Tesseract Install: sudo apt-get install tesseract-ocr -y
 # 7. Requirements Install: pip3 install -r /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/requirements.txt
 # 8. Anilist Install: pip3 install /scripts/komga-cover-extractor/addons/manga_isbn/python-anilist-1.0.9/.
+#
+# source /data/docker/scripts/komga-cover-extractor/addons/manga_isbn/venv/bin/activate
 
 # downoads required items for nltk.tokenize
 nltk.download("punkt")
@@ -316,6 +318,19 @@ unsuccessful_api_matches = []
 # This prevents the same ISBN from being searched against the API multiple times,
 # e.g. when it's found repeatedly while scanning a zip/epub's internal contents.
 isbn_api_lookup_cache = {}
+
+# Cache of raw Google Books API responses, keyed by the full request URL
+# (which fully encodes the query, filters, isbn/volume_id, etc).
+# This persists across volumes belonging to the same series so that,
+# e.g., when v01-v03 of a series have already been searched, v04 doesn't
+# need to hit the API again for any duplicate/overlapping queries.
+# It's cleared automatically whenever the series being processed changes.
+google_books_api_cache = {}
+
+# The series name that google_books_api_cache currently holds results for.
+# Used to detect when processing has moved on to a different series so the
+# cache can be invalidated.
+google_books_api_cache_series_name = None
 
 # EPUBs where we couldn't find an ISBN, but our second attempt was successful
 # The second attempt being an OCR on all the
@@ -2520,6 +2535,43 @@ def check_description_match(file_descriptions, extracted_title, series_name=None
     return False
 
 
+# Clears the cached Google Books API results whenever the series being
+# processed has changed since the last call. Call this once per volume/file,
+# before any search_google_books() calls are made for it (e.g. at the top of
+# process_file()), passing in volume.series_name.
+#
+# As long as consecutive volumes belong to the same series (e.g. v01, v02,
+# v03, v04 of "Beauty and the Feast"), the cache is left intact so repeat/
+# overlapping queries reuse previously fetched results instead of re-hitting
+# the API. As soon as a differently-named series is encountered, the cache
+# is thrown out since it's no longer useful.
+def update_google_books_cache_for_series(series_name):
+    global google_books_api_cache, google_books_api_cache_series_name
+    global image_link_cache
+
+    if not series_name:
+        return
+
+    if (
+        google_books_api_cache_series_name is not None
+        and series_name != google_books_api_cache_series_name
+    ):
+        if google_books_api_cache:
+            print(
+                f"\tSeries changed ({google_books_api_cache_series_name} -> {series_name}), "
+                f"clearing cached Google Books API results ({len(google_books_api_cache)} entries)..."
+            )
+        google_books_api_cache = {}
+        if image_link_cache:
+            print(
+                f"\tSeries changed ({google_books_api_cache_series_name} -> {series_name}), "
+                f"clearing cached image link data ({len(image_link_cache)} entries)..."
+            )
+        image_link_cache = []
+
+    google_books_api_cache_series_name = series_name
+
+
 # Looks up the IBSN number on Google Books API and returns the information
 def search_google_books(
     isbn,
@@ -2535,6 +2587,7 @@ def search_google_books(
 ):
     global sleep_time
     global api_hits
+    global google_books_api_cache
 
     file_name = os.path.basename(file_name)
     base_api_link = ""
@@ -2605,29 +2658,38 @@ def search_google_books(
             separator = "?" if "?" not in base_api_link else "&"
             base_api_link += f"{separator}key={google_books_api_key}"
 
-        if not mute_output:
-            print(f"Search: {base_api_link}")
+        # 2: Perform the api request, using the cached response for this
+        # exact URL if we already have one for the current series.
+        if base_api_link in google_books_api_cache:
+            if not mute_output:
+                print(f"Search (cached): {base_api_link}")
 
-        # 2: Perform the api request
-        with urllib.request.urlopen(base_api_link) as f:
-            text = f.read()
+            obj = google_books_api_cache[base_api_link]
+        else:
+            if not mute_output:
+                print(f"Search: {base_api_link}")
 
-        api_hits += 1
+            with urllib.request.urlopen(base_api_link) as f:
+                text = f.read()
 
-        # Check if we are close to the api rate limit
-        if api_rate_limit and api_hits % 25 == 0:
-            print(f"\n\tAPI Hits: {api_hits}")
-            print(
-                f"\tSleeping for {sleep_time} seconds to avoid being api-rate limited.\n"
-            )
-            time.sleep(sleep_time)
+            api_hits += 1
 
-        # Return if we got no results
-        if not text:
-            return None
+            # Check if we are close to the api rate limit
+            if api_rate_limit and api_hits % 25 == 0:
+                print(f"\n\tAPI Hits: {api_hits}")
+                print(
+                    f"\tSleeping for {sleep_time} seconds to avoid being api-rate limited.\n"
+                )
+                time.sleep(sleep_time)
 
-        decoded_text = text.decode("utf-8")
-        obj = json.loads(decoded_text)
+            # Return if we got no results
+            if not text:
+                return None
+
+            decoded_text = text.decode("utf-8")
+            obj = json.loads(decoded_text)
+
+            google_books_api_cache[base_api_link] = obj
 
         # Return if we got no results
         if not obj:
@@ -5943,23 +6005,23 @@ def process_image_link(
     elif cover_path:
         cover_image = load_image_from_path(cover_path)
 
+    print(
+        f"\t\t\tImage Link {result.image_links.index(link) + 1} of {len(result.image_links)}:"
+    )
     online_image_data = None
-    if image_link_cache and session_result_data:
+    if image_link_cache:
         cached_item = next(
             (item for item in image_link_cache if item.image_link == link), None
         )
         if cached_item:
             online_image_data = cached_item.image_data
-
-    print(
-        f"\t\t\tImage Link {result.image_links.index(link) + 1} of {len(result.image_links)}"
-    )
-    print(f"\t\t\t\tImage Link: {link}")
-
+            print(f"\t\t\t\t(cached) Image Link: {link}")
+    
     if not online_image_data:
+        print(f"\t\t\t\tImage Link: {link}")
         try:
             online_image_data = fetch_online_image(link, provider_name)
-            if session_result_data:
+            if online_image_data:
                 image_link_cache_item = ImageLinkCache(link, online_image_data)
                 if image_link_cache_item not in image_link_cache:
                     image_link_cache.append(image_link_cache_item)
@@ -9356,6 +9418,12 @@ def replace_underscores(name):
 
 
 def process_file(volume, files, file_only=False):
+    # Clear the Google Books API result cache if this volume belongs to a
+    # different series than the last one processed, otherwise leave it
+    # intact so this volume can reuse any overlapping results already
+    # fetched for earlier volumes of the same series.
+    update_google_books_cache_for_series(volume.series_name)
+
     zip_comments = str(get_zip_comment(volume.path))
 
     if skip_if_has_zip_comment and zip_comments:
