@@ -9234,7 +9234,6 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                 else:
                     cached_series_result = None
                     successful_match = False
-                    image_link_cache = []
 
                     send_message(
                         f"\n\tHighest SSIM Score: {best_result.ssim_score} is less than the required score of {required_image_ssim_score}"
@@ -9712,7 +9711,6 @@ def process_file(volume, files, file_only=False):
                 else:
                     successful_match = False
                     cached_series_result = None
-                    image_link_cache = []
 
             if provider.enabled:
                 previous_provider = provider
