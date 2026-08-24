@@ -8219,7 +8219,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                                     session_result.append(item)
                                     break
                         print(
-                            f"\n\tScraping series info for: https://play.google.com/store/books/series?id={id}"
+                            f"\n\tScraping series info from: https://play.google.com/store/books/series?id={id}"
                             + "\n\t\tMay take awhile depending on the number of ids..."
                         )
                         series_info_scrapped = scrape_series_ids(id)
@@ -8312,7 +8312,6 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
             clean_b_results = []
             clean_no_volume_keyword_results = []
             clean_no_volume_keyword_results_newest = []
-            clean_no_volume_keyword_results_no_cat = []
 
             # Check if volume_part exists and add it to the search strings
             if volume.volume_part:
@@ -8685,40 +8684,6 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                                 if result not in cleaned_results
                             ]
                         )
-
-                # search three without volume keyword + no category check
-                if not series_info:
-                    print(
-                        f"\nAdditional Search without volume Keyword: {search_three}, with no category check."
-                    )
-                    no_volume_keyword_results_no_cat = search_google_books(
-                        0,
-                        volume.path,
-                        search_three,
-                        max_results_num=3,
-                        in_line_search=True,
-                    )
-                    if no_volume_keyword_results_no_cat:
-                        clean_no_volume_keyword_results_no_cat = clean_api_results(
-                            no_volume_keyword_results,
-                            volume.volume_number,
-                            first_word_in_series,
-                            volume.multi_volume,
-                            volume.series_name,
-                            volume.extension,
-                            volume.volume_part,
-                            skip_series_similarity=True,
-                            skip_vol_nums_equal=True,
-                            skip_categories_check=True,
-                        )
-                        if clean_no_volume_keyword_results_no_cat:
-                            cleaned_results.extend(
-                                [
-                                    result
-                                    for result in clean_no_volume_keyword_results_no_cat
-                                    if result not in cleaned_results
-                                ]
-                            )
 
             if provider.name == "kobo":
                 print(f"\nSearching Kobo with: {search}")
