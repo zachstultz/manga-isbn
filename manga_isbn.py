@@ -10183,11 +10183,8 @@ if __name__ == "__main__":
 
                 files, dirs = clean[0], clean[1]
 
-                if skip_to_file:
-                    if skip_to_file in files:
-                        skip_to_file = None
-                    else:
-                        continue
+                if skip_to_file and skip_to_file not in files:
+                    continue
 
                 if root == path:
                     # Remove all that aren't specified in skip_letters
@@ -10238,6 +10235,12 @@ if __name__ == "__main__":
 
                     if not chapter_support_toggle and volume.file_type == "chapter":
                         continue
+
+                    if skip_to_file:
+                        if skip_to_file == volume.name:
+                            skip_to_file = None
+                        else:
+                            continue
 
                     lower_name = volume.name.lower()
 
