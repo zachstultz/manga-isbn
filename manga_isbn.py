@@ -4721,13 +4721,18 @@ def compare_metadata(book, epub_path, files):
             cbz_changes.append("maturity_rating: M")
             data_comparison.append(data.maturity_rating)
         if extension == ".cbz":
-            if data.api_link != book.api_link:
+            if book.api_link and book.api_link not in str(data.api_link):
+                existing_web_links = (
+                    data.api_link
+                    if isinstance(data.api_link, list)
+                    else ([data.api_link] if data.api_link else [])
+                )
                 cbz_changes.append("web_links: " + yaml_quote(book.api_link))
-                data_comparison.append(data.api_link)
-            custom_note = f"Tagged on {datetime.now().date()}"
-            if cbz_changes and data.notes != custom_note:
-                cbz_changes.append(f"notes: {yaml_quote(custom_note)}")
-                data_comparison.append(data.notes)
+                data_comparison.append(" ".join(existing_web_links))
+            # custom_note = f"Tagged on {datetime.now().date()}"
+            # if cbz_changes and data.notes != custom_note:
+            #     cbz_changes.append(f"notes: {yaml_quote(custom_note)}")
+            #     data_comparison.append(data.notes)
 
         if cbz_changes and data_comparison:
             update_metadata(
@@ -5437,8 +5442,13 @@ def get_cbz_metadata(path):
     day = data.get("day", "")
     volume = data.get("volume", "")
     web_link = data.get("web_link", "") or data.get("web_links", "")
-    if isinstance(web_link, str):
-        web_link = web_link.strip("[]'\" ")
+    web_link = web_link.strip("[]'\" ")
+    if web_link:
+        web_link = [
+            link.strip().strip("[]'\" ") for link in web_link.split(",") if link.strip()
+        ]
+    else:
+        web_link = []
     scan_info = data.get("scan_info", "")
     characters = data.get("characters", "")
     comments = data.get("comments", "") or data.get("description", "")
@@ -6016,7 +6026,7 @@ def process_image_link(
         if cached_item:
             online_image_data = cached_item.image_data
             print(f"\t\t\t\t(cached) Image Link: {link}")
-    
+
     if not online_image_data:
         print(f"\t\t\t\tImage Link: {link}")
         try:
