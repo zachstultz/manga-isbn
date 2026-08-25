@@ -10,6 +10,7 @@ import io
 import json
 import os
 import random
+import sqlite3
 import string
 import subprocess
 import time
@@ -254,6 +255,12 @@ profile_code = ""
 
 # The path to the series_ids_cache.json file
 cached_series_temp_path = "/tmp/series_ids_cache.json"
+
+# The path to the image_link_cache.db file, used to persist cached Google
+# Books cover image data across script executions. Follows the same
+# lifecycle as cached_series_temp_path: it's read from on startup and
+# purged whenever the series being processed changes.
+cached_image_link_temp_path = "/tmp/image_link_cache.db"
 
 # Default image compression value.
 # Pass in via cli
@@ -861,6 +868,67 @@ class ImageLinkCache:
     def __init__(self, image_link, image_data):
         self.image_link = image_link
         self.image_data = image_data
+
+
+# Opens (creating if necessary) the sqlite database used to persist
+# image_link_cache to /tmp so cached cover image data can be reused on
+# subsequent executions of the script.
+def get_image_link_cache_db():
+    conn = sqlite3.connect(cached_image_link_temp_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS image_link_cache "
+        "(image_link TEXT PRIMARY KEY, image_data BLOB)"
+    )
+    return conn
+
+
+# Loads the persisted image_link_cache.db file (if present) into the
+# in-memory image_link_cache list. Only loads when the in-memory cache is
+# currently empty, so it won't clobber results already gathered this run.
+def load_image_link_cache_from_disk():
+    global image_link_cache
+
+    if image_link_cache or not os.path.isfile(cached_image_link_temp_path):
+        return
+
+    try:
+        conn = get_image_link_cache_db()
+        rows = conn.execute(
+            "SELECT image_link, image_data FROM image_link_cache"
+        ).fetchall()
+        conn.close()
+        if rows:
+            image_link_cache = [ImageLinkCache(link, data) for link, data in rows]
+            print(
+                f"\tLoaded cached image link data from: {cached_image_link_temp_path} "
+                f"({len(image_link_cache)} entries)"
+            )
+    except Exception as e:
+        send_message(str(e), error=True)
+
+
+# Persists a single image_link_cache entry to image_link_cache.db, so it can
+# be reused on subsequent executions of the script.
+def save_image_link_cache_item_to_disk(item):
+    try:
+        conn = get_image_link_cache_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO image_link_cache (image_link, image_data) VALUES (?, ?)",
+            (item.image_link, sqlite3.Binary(item.image_data)),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        send_message(str(e), error=True)
+
+
+# Deletes the persisted image_link_cache.db file, if present.
+def clear_image_link_cache_on_disk():
+    if os.path.isfile(cached_image_link_temp_path):
+        try:
+            os.remove(cached_image_link_temp_path)
+        except Exception as e:
+            send_message(str(e), error=True)
 
 
 # our current list of supported metadata providers
@@ -2568,8 +2636,13 @@ def update_google_books_cache_for_series(series_name):
                 f"clearing cached image link data ({len(image_link_cache)} entries)..."
             )
         image_link_cache = []
+        clear_image_link_cache_on_disk()
 
     google_books_api_cache_series_name = series_name
+
+    # Load any image link cache persisted from a previous execution for this
+    # series, if we don't already have one in memory.
+    load_image_link_cache_from_disk()
 
 
 # Looks up the IBSN number on Google Books API and returns the information
@@ -6035,6 +6108,7 @@ def process_image_link(
                 image_link_cache_item = ImageLinkCache(link, online_image_data)
                 if image_link_cache_item not in image_link_cache:
                     image_link_cache.append(image_link_cache_item)
+                    save_image_link_cache_item_to_disk(image_link_cache_item)
         except Exception as e:
             send_message(f"Error fetching online image: {e}", error=True)
             return None
