@@ -872,23 +872,81 @@ class ImageLinkCache:
 
 # Opens (creating if necessary) the sqlite database used to persist
 # image_link_cache to /tmp so cached cover image data can be reused on
-# subsequent executions of the script.
+# subsequent executions of the script. Also tracks, in a small meta table,
+# which series_name the persisted entries belong to, so a later execution
+# (which has no in-memory google_books_api_cache_series_name to compare
+# against) can tell whether the cache on disk is still relevant before
+# loading a bunch of image data into memory.
 def get_image_link_cache_db():
     conn = sqlite3.connect(cached_image_link_temp_path)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS image_link_cache "
         "(image_link TEXT PRIMARY KEY, image_data BLOB)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS image_link_cache_meta "
+        "(id INTEGER PRIMARY KEY CHECK (id = 0), series_name TEXT)"
+    )
     return conn
+
+
+# Returns the series_name the persisted image_link_cache.db file was last
+# saved for, or None if there isn't one (e.g. no file, or no meta row yet).
+def get_persisted_image_link_cache_series_name():
+    if not os.path.isfile(cached_image_link_temp_path):
+        return None
+
+    try:
+        conn = get_image_link_cache_db()
+        row = conn.execute(
+            "SELECT series_name FROM image_link_cache_meta WHERE id = 0"
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        send_message(str(e), error=True)
+        return None
+
+
+# Records which series_name the persisted image_link_cache.db file's entries
+# belong to.
+def set_persisted_image_link_cache_series_name(series_name):
+    try:
+        conn = get_image_link_cache_db()
+        conn.execute(
+            "INSERT INTO image_link_cache_meta (id, series_name) VALUES (0, ?) "
+            "ON CONFLICT(id) DO UPDATE SET series_name = excluded.series_name",
+            (series_name,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        send_message(str(e), error=True)
 
 
 # Loads the persisted image_link_cache.db file (if present) into the
 # in-memory image_link_cache list. Only loads when the in-memory cache is
 # currently empty, so it won't clobber results already gathered this run.
-def load_image_link_cache_from_disk():
+#
+# Before loading any image data, the persisted series_name is checked against
+# the series_name passed in. If they don't match, the cache on disk is for a
+# different/stale series (e.g. from a prior execution of the script that
+# never got a chance to see the series change and purge it), so it's purged
+# instead of being loaded, avoiding pulling a bunch of unnecessary image data
+# into memory.
+def load_image_link_cache_from_disk(series_name):
     global image_link_cache
 
     if image_link_cache or not os.path.isfile(cached_image_link_temp_path):
+        return
+
+    persisted_series_name = get_persisted_image_link_cache_series_name()
+    if (
+        not series_name
+        or not persisted_series_name
+        or persisted_series_name.lower().strip() != series_name.lower().strip()
+    ):
+        clear_image_link_cache_on_disk()
         return
 
     try:
@@ -908,8 +966,9 @@ def load_image_link_cache_from_disk():
 
 
 # Persists a single image_link_cache entry to image_link_cache.db, so it can
-# be reused on subsequent executions of the script.
-def save_image_link_cache_item_to_disk(item):
+# be reused on subsequent executions of the script. Also (re)records the
+# series_name it belongs to.
+def save_image_link_cache_item_to_disk(item, series_name):
     try:
         conn = get_image_link_cache_db()
         conn.execute(
@@ -920,6 +979,8 @@ def save_image_link_cache_item_to_disk(item):
         conn.close()
     except Exception as e:
         send_message(str(e), error=True)
+
+    set_persisted_image_link_cache_series_name(series_name)
 
 
 # Deletes the persisted image_link_cache.db file, if present.
@@ -2642,7 +2703,7 @@ def update_google_books_cache_for_series(series_name):
 
     # Load any image link cache persisted from a previous execution for this
     # series, if we don't already have one in memory.
-    load_image_link_cache_from_disk()
+    load_image_link_cache_from_disk(series_name)
 
 
 # Looks up the IBSN number on Google Books API and returns the information
@@ -5998,6 +6059,7 @@ def process_image_link(
     result, cover_path, link, internal_cover_data, session_result_data, provider_name
 ):
     global image_link_cache
+    global google_books_api_cache_series_name
 
     def load_image_from_bytes(image_data):
         return decode_image_bytes(image_data)
@@ -6108,7 +6170,9 @@ def process_image_link(
                 image_link_cache_item = ImageLinkCache(link, online_image_data)
                 if image_link_cache_item not in image_link_cache:
                     image_link_cache.append(image_link_cache_item)
-                    save_image_link_cache_item_to_disk(image_link_cache_item)
+                    save_image_link_cache_item_to_disk(
+                        image_link_cache_item, google_books_api_cache_series_name
+                    )
         except Exception as e:
             send_message(f"Error fetching online image: {e}", error=True)
             return None
