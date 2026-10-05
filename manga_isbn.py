@@ -56,7 +56,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from settings import *
 
-script_version = (1, 2, 0)
+script_version = (1, 4, 0)
 script_version_text = "v{}.{}.{}".format(*script_version)
 
 # ======= REQUIRED INSTALLS =======
@@ -391,6 +391,9 @@ cover_patterns = [
     r"(\bindex[-_. ]1[-_. ]1\b)",
     r"(9([-_. :]+)?7([-_. :]+)?(8|9)(([-_. :]+)?[0-9]){10})",
 ]
+
+# Skips the current folder during manual pick mode
+skip_current_folder = False
 
 # Pre-compiled regular expressions for cover patterns
 compiled_cover_patterns = [
@@ -8262,6 +8265,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
     global successful_match
     global image_link_cache
     global file_descriptions, result_subtitles
+    global skip_current_folder
 
     session_result = []
     series_info = []
@@ -9235,24 +9239,32 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
                         print(f"\t\tVolume: {result.book.volume}")
                         print(f"\t\tISBN: {result.book.isbn}")
                         print(f"\t\tAPI Link: {result.book.api_link}")
-                        print(f"\t\tLink: {best_result.book.preview_link}")
-                        print(f"\t\tImage Link: {best_result.image_link}\n")
+                        print(f"\t\tLink: {result.book.preview_link}")
+                        print(f"\t\tImage Link: {result.image_link}")
+                        print(f"\t\tSSIM Score: {result.ssim_score}")
 
                         print(f"\n\t\tFile Name: {volume.name}\n")
 
+                        if result.ssim_score <= 0.20:
+                            continue
+
                         # get the user input
                         user_input = ""
-                        while user_input not in ["y", "n", "nn"]:
+                        while user_input not in ["y", "n", "nn", "nnn"]:
                             user_input = input(
-                                "\t\tAccept this result? (y/n/nn): "
+                                "\t\tAccept this result? (y/n/nn/nnn): "
                             ).lower()
-                            if user_input not in ["y", "n", "nn"]:
+                            if user_input not in ["y", "n", "nn", "nnn"]:
                                 print("\t\t\tInvalid input. Please try again.")
                             if user_input in ["y"]:
                                 best_result = result
                                 passed = True
                                 break
                             elif user_input in ["nn"]:
+                                break_loop = True
+                                break
+                            elif user_input in ["nnn"] and not skip_current_folder:
+                                skip_current_folder = True
                                 break_loop = True
                                 break
                             else:
@@ -10368,6 +10380,10 @@ if __name__ == "__main__":
                     break
 
                 for volume in volumes:
+                    if skip_current_folder:
+                        skip_current_folder = False
+                        break
+                    
                     if volume.volume_number == "":
                         continue
 
@@ -10383,7 +10399,9 @@ if __name__ == "__main__":
                     lower_name = volume.name.lower()
 
                     is_digital_comp = "digital" in lower_name and (
-                        "compilation" in lower_name or "danke-repack" in lower_name
+                        "compilation" in lower_name
+                        or "danke-repack" in lower_name
+                        or "emaqi" in lower_name
                     )
 
                     if (
