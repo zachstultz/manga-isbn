@@ -6352,37 +6352,41 @@ def click_show_more_button(driver):
 # Function to scrape series IDs
 @lru_cache(maxsize=None)
 def scrape_series_ids(id, sort=False):
-    url = f"https://play.google.com/store/books/series?id={id}"
     search_results = set()
+    try:
+        url = f"https://play.google.com/store/books/series?id={id}"
+        options = [
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=7680,4320",
+            "--start-maximized",
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ]
+        driver = get_page_driver(url, options)
+        if not driver:
+            return []
 
-    options = [
-        "--disable-blink-features=AutomationControlled",
-        "--window-size=7680,4320",
-        "--start-maximized",
-        "--headless",
-        "--disable-gpu",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-    ]
-    driver = get_page_driver(url, options)
-    if not driver:
-        return []
+        if click_show_more_button(driver):
+            print("\tScraped IDs with clicking.")
+        else:
+            print("\tScraped IDs without clicking.")
 
-    if click_show_more_button(driver):
-        print("\tScraped IDs with clicking.")
-    else:
-        print("\tScraped IDs without clicking.")
+        # Parse the final page source
+        soup = BeautifulSoup(driver.page_source, "lxml")
+        ids = get_series_ids(soup, sort=sort)
 
-    # Parse the final page source
-    soup = BeautifulSoup(driver.page_source, "lxml")
-    ids = get_series_ids(soup, sort=sort)
+        if ids:
+            search_results.update(ids)
+        else:
+            print("\tNo IDs found")
 
-    if ids:
-        search_results.update(ids)
-    else:
-        print("\tNo IDs found")
+        driver.quit()
+    except Exception as e:
+        send_message(str(e), error=True)
+        write_to_file("isbn_script_errors.txt", str(e))
 
-    driver.quit()
     return list(set(search_results))
 
 
@@ -9278,7 +9282,7 @@ def search_provider(volume, provider, zip_comment, dir_files=None):
 
                         print(f"\n\t\tFile Name: {volume.name}\n")
 
-                        if result.ssim_score <= 0.20:
+                        if result.ssim_score <= 0.15:
                             continue
 
                         # get the user input
