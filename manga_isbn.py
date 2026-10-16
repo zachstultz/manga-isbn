@@ -349,6 +349,10 @@ items_not_found_through_image_comparision_search = []
 # Amount of time to sleep when the API hits the rate limit in seconds
 sleep_time = 7
 
+# Amount of time to sleep between each Google Books API request to
+# avoid triggering 503s from rapid successive calls.
+api_request_sleep_time = 1
+
 # Amount of time to sleep when a limit is hit when web scraping
 web_scrape_sleep_time = 5
 
@@ -2806,10 +2810,39 @@ def search_google_books(
             if not mute_output:
                 print(f"Search: {base_api_link}")
 
-            with urllib.request.urlopen(base_api_link) as f:
-                text = f.read()
+            # Retryable HTTP status codes (transient server-side errors)
+            retryable_codes = {429, 500, 502, 503, 504}
+            text = None
+            for attempt in range(total_api_re_attempts):
+                try:
+                    with urllib.request.urlopen(base_api_link) as f:
+                        text = f.read()
+                    break  # success — exit retry loop
+                except urllib.error.HTTPError as e:
+                    if e.code in retryable_codes:
+                        retry_delay = min(sleep_time * (2**attempt), 60)
+                        if attempt < total_api_re_attempts - 1:
+                            print(
+                                f"\tHTTP {e.code} ({e.reason}) on attempt"
+                                f" {attempt + 1}/{total_api_re_attempts}."
+                                f" Retrying in {retry_delay}s..."
+                            )
+                            time.sleep(retry_delay)
+                        else:
+                            print(
+                                f"\tHTTP {e.code} ({e.reason}) after"
+                                f" {total_api_re_attempts} attempts. Giving up."
+                            )
+                            raise
+                    else:
+                        raise  # non-retryable (400, 403, 404, etc.)
 
             api_hits += 1
+
+            # Sleep between requests to avoid triggering 503s from
+            # rapid successive calls.
+            if api_request_sleep_time:
+                time.sleep(api_request_sleep_time)
 
             # Check if we are close to the api rate limit
             if api_rate_limit and api_hits % 25 == 0:
@@ -10383,7 +10416,7 @@ if __name__ == "__main__":
                     if skip_current_folder:
                         skip_current_folder = False
                         break
-                    
+
                     if volume.volume_number == "":
                         continue
 
