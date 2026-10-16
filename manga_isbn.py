@@ -351,7 +351,7 @@ sleep_time = 7
 
 # Amount of time to sleep between each Google Books API request to
 # avoid triggering 503s from rapid successive calls.
-api_request_sleep_time = 1
+api_request_sleep_time = 7
 
 # Amount of time to sleep when a limit is hit when web scraping
 web_scrape_sleep_time = 5
@@ -369,7 +369,7 @@ total_files = 0
 api_hits = 0
 
 # Total amount of retries for an API request
-total_api_re_attempts = 10
+total_api_re_attempts = 5
 
 # Required image similarity score for image similarity
 required_image_ssim_score = 0.74
