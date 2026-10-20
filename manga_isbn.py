@@ -247,6 +247,9 @@ subtitle_exclusion_keywords_regex = "|".join(subtitle_exclusion_keywords)
 # Chrome driver location for selenium
 chrome_driver_location = os.path.join(ROOT_DIR, "chrome/webdriver/chromedriver")
 
+# Avoid webdriver-manager timeout lock
+_cached_chromedriver_path = None
+
 # To compress the extracted images
 compress_image_option = False
 
@@ -6430,10 +6433,12 @@ def get_series_ids(soup, sort=True):
 
 # Gets the user a webdriver object based on the url passed in
 def get_page_driver(url, options=[]):
-    # Set the location of the chrome driver. using Service, with chrome_driver_location
-    service = ChromeService(ChromeDriverManager().install())
-    # service = ChromeService(chrome_driver_location)
+    global _cached_chromedriver_path
+    if not _cached_chromedriver_path:
+        _cached_chromedriver_path = ChromeDriverManager().install()
 
+    service = ChromeService(_cached_chromedriver_path)
+    
     # Create the options object
     chrome_options = webdriver.ChromeOptions()
 
@@ -6441,7 +6446,7 @@ def get_page_driver(url, options=[]):
     if options:
         for option in options:
             chrome_options.add_argument(option)
-
+    
     # Create the driver
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
